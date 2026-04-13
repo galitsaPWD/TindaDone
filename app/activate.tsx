@@ -19,24 +19,41 @@ import {
   saveActivation, 
   getTrialStatus, 
   startTrial,
+  syncTrialWithServer,
   TrialStatus 
 } from '../lib/license';
+import { getBusinessSettings, saveBusinessSettings } from '../lib/storage';
+import { useSettings } from '../context/SettingsContext';
 import { Theme } from '../constants/Theme';
 import { CheckCircle2, Lock, Play, Clock, AlertTriangle } from 'lucide-react-native';
 
 export default function ActivateScreen() {
   const router = useRouter();
+  const { updateSettings } = useSettings();
   const [deviceCode, setDeviceCode] = useState('');
   const [activationKey, setActivationKey] = useState('');
   const [loading, setLoading] = useState(true);
   const [verifying, setVerifying] = useState(false);
   const [error, setError] = useState('');
   const [trial, setTrial] = useState<TrialStatus | null>(null);
+  const [storeName, setStoreName] = useState('');
+  const [showToast, setShowToast] = useState(false);
+  const [showNameModal, setShowNameModal] = useState(false);
+  const [pendingSuccessType, setPendingSuccessType] = useState<'trial' | 'key' | null>(null);
+  
   const shakeAnim = useRef(new Animated.Value(0)).current;
+  const toastAnim = useRef(new Animated.Value(40)).current;
+  const toastOpacity = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     const init = async () => {
       const code = await generateDeviceCode();
+      const settings = await getBusinessSettings();
+      if (settings.storeName) setStoreName(settings.storeName);
+
+      setLoading(true);
+      await syncTrialWithServer();
+      
       const status = await getTrialStatus();
       setDeviceCode(code);
       setTrial(status);
@@ -56,33 +73,94 @@ export default function ActivateScreen() {
     ]).start();
   };
 
+  const showNotification = (msg: string) => {
+    setError(msg);
+    setShowToast(true);
+    
+    Animated.parallel([
+      Animated.spring(toastAnim, { toValue: 0, useNativeDriver: true, tension: 50 }),
+      Animated.timing(toastOpacity, { toValue: 1, duration: 200, useNativeDriver: true }),
+    ]).start();
+
+    setTimeout(() => {
+      Animated.parallel([
+        Animated.timing(toastAnim, { toValue: 20, duration: 300, useNativeDriver: true }),
+        Animated.timing(toastOpacity, { toValue: 0, duration: 300, useNativeDriver: true }),
+      ]).start(() => setShowToast(false));
+    }, 3000);
+  };
+
+  const persistStoreName = async () => {
+    try {
+      const settings = await getBusinessSettings();
+      await updateSettings({ ...settings, storeName: storeName.trim() });
+    } catch (e) {
+      console.error('Failed to save store name to settings:', e);
+    }
+  };
+
   const handleActivate = async () => {
     if (activationKey.trim().length < 8) {
-      setError('Please enter a valid activation key.');
+      showNotification('Please enter a valid activation key.');
       shake();
       return;
     }
+    
+    // For Activation: Validate KEY first, then ask NAME
     setVerifying(true);
-    setError('');
     const valid = await validateActivationKey(deviceCode, activationKey);
     if (valid) {
-      await saveActivation();
-      router.replace('/(tabs)/sell');
+      setPendingSuccessType('key');
+      setShowNameModal(true);
+      setVerifying(false);
     } else {
       shake();
-      setError('Invalid key. Contact your seller.');
+      showNotification('Invalid key. Contact your seller.');
       setVerifying(false);
     }
   };
 
-  const handleStartTrial = async () => {
-    await startTrial();
-    router.replace('/(tabs)/sell');
+  const handleStartTrial = () => {
+    // For Trial: Ask NAME first, then Handshake
+    setPendingSuccessType('trial');
+    setShowNameModal(true);
+  };
+
+  const handleFinalizeOnboarding = async () => {
+    if (!storeName.trim()) {
+      Vibration.vibrate();
+      shake();
+      return;
+    }
+    
+    setVerifying(true);
+    try {
+      if (pendingSuccessType === 'trial') {
+        // TRIAL Handshake with the REAL name now
+        const result = await startTrial(storeName.trim());
+        if (!result.success) {
+          showNotification(result.error || 'Connection error. Try Again.');
+          setVerifying(false);
+          return;
+        }
+      } else {
+        // ACTIVATION Persistence
+        await saveActivation();
+      }
+
+      // Save locally to Settings
+      await persistStoreName();
+      
+      setShowNameModal(false);
+      router.replace('/(tabs)/sell');
+    } catch (e) {
+      showNotification('Error saving registration.');
+    }
+    setVerifying(false);
   };
 
   const formatKeyInput = (text: string) => {
     setActivationKey(text.toUpperCase().replace(/[^A-Z0-9-]/g, ''));
-    setError('');
   };
 
   if (loading) {
@@ -132,6 +210,8 @@ export default function ActivateScreen() {
           </View>
         )}
 
+        <View style={styles.spacer} />
+
         {/* Device Code Card */}
         <View style={styles.codeCard}>
           <Text style={styles.codeLabel}>YOUR DEVICE CODE</Text>
@@ -139,12 +219,12 @@ export default function ActivateScreen() {
           <Text style={styles.codeHint}>Send this code to your seller to get your key</Text>
         </View>
 
-        {/* Key Input */}
+        {/* Key Input Section */}
         <View style={styles.inputSection}>
           <Text style={styles.inputLabel}>ENTER ACTIVATION KEY</Text>
           <Animated.View style={{ transform: [{ translateX: shakeAnim }] }}>
             <TextInput
-              style={[styles.keyInput, error ? styles.keyInputError : null]}
+              style={[styles.keyInput, error === 'Please enter a valid activation key.' ? styles.keyInputError : null]}
               placeholder="XXXX-XXXX-XXXX"
               placeholderTextColor={Theme.colors.outlineVariant}
               value={activationKey}
@@ -157,7 +237,6 @@ export default function ActivateScreen() {
               textContentType="none"
             />
           </Animated.View>
-          {error ? <Text style={styles.errorText}>{error}</Text> : null}
         </View>
 
         <TouchableOpacity
@@ -175,16 +254,34 @@ export default function ActivateScreen() {
           )}
         </TouchableOpacity>
 
+        <View style={styles.divider} />
+
         {/* Trial Options */}
         {trial?.notStarted && (
-          <TouchableOpacity style={styles.trialBtn} onPress={handleStartTrial}>
-            <Play size={18} color={Theme.colors.primary} style={{ marginRight: 8 }} />
-            <Text style={styles.trialBtnText}>Start 3-Day Free Trial</Text>
+          <TouchableOpacity 
+            style={[styles.trialBtn, verifying && { opacity: 0.7 }]} 
+            onPress={handleStartTrial}
+            disabled={verifying}
+          >
+            {verifying ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <ActivityIndicator color={Theme.colors.primary} style={{ marginRight: 8 }} />
+                <Text style={styles.trialBtnText}>Handshaking...</Text>
+              </View>
+            ) : (
+              <>
+                <Play size={18} color={Theme.colors.primary} style={{ marginRight: 8 }} />
+                <Text style={styles.trialBtnText}>Start 3-Day Free Trial</Text>
+              </>
+            )}
           </TouchableOpacity>
         )}
 
         {trial?.active && (
-          <TouchableOpacity style={styles.trialBtn} onPress={() => router.replace('/(tabs)/sell')}>
+          <TouchableOpacity 
+            style={styles.trialBtn} 
+            onPress={() => router.replace('/(tabs)/sell')}
+          >
             <Text style={styles.trialBtnText}>Continue to Dashboard</Text>
           </TouchableOpacity>
         )}
@@ -193,6 +290,62 @@ export default function ActivateScreen() {
           Permanent activation keeps all your data safe forever.
         </Text>
       </ScrollView>
+
+      {/* 🏙️ Registration Modal */}
+      {showNameModal && (
+        <View style={styles.modalOverlay}>
+          <Animated.View style={styles.modalCard}>
+            <View style={styles.modalIcon}>
+              <CheckCircle2 size={32} color={Theme.colors.primary} />
+            </View>
+            <Text style={styles.modalTitle}>Success!</Text>
+            <Text style={styles.modalSub}>
+              {pendingSuccessType === 'key' ? 'License activated' : 'Trial started'} successfully. 
+              One last thing—what is the name of your Store?
+            </Text>
+
+            <View style={[styles.inputSection, { marginBottom: 20 }]}>
+              <Text style={styles.inputLabel}>BUSINESS / STORE NAME</Text>
+              <Animated.View style={{ transform: [{ translateX: shakeAnim }] }}>
+                <TextInput
+                  style={[styles.keyInput, { fontSize: 16, textAlign: 'center', letterSpacing: 0, paddingHorizontal: 20 }]}
+                  placeholder="e.g. Aling Nena's Store"
+                  placeholderTextColor={Theme.colors.outlineVariant}
+                  value={storeName}
+                  onChangeText={setStoreName}
+                  autoFocus
+                />
+              </Animated.View>
+            </View>
+
+            <TouchableOpacity 
+              style={styles.activateBtn} 
+              onPress={handleFinalizeOnboarding}
+              disabled={verifying}
+            >
+              {verifying ? (
+                <ActivityIndicator color="#FFF" />
+              ) : (
+                <Text style={styles.activateBtnText}>Enter My Store</Text>
+              )}
+            </TouchableOpacity>
+          </Animated.View>
+        </View>
+      )}
+
+      {/* Floating Toast Notification */}
+      {showToast && (
+        <Animated.View style={[
+          styles.toastContainer, 
+          { 
+            opacity: toastOpacity,
+            transform: [{ translateY: toastAnim }]
+          }
+        ]}>
+          <AlertTriangle size={18} color="#FFF" style={{ marginRight: 10 }} />
+          <Text style={styles.toastText}>{error}</Text>
+        </Animated.View>
+      )}
     </KeyboardAvoidingView>
   );
 }
@@ -255,7 +408,7 @@ const styles = StyleSheet.create({
     width: '100%',
     backgroundColor: Theme.colors.primaryContainer,
     borderRadius: 24,
-    padding: 20,
+    padding: 24,
     alignItems: 'center',
     marginBottom: 24,
   },
@@ -306,12 +459,37 @@ const styles = StyleSheet.create({
   keyInputError: {
     borderColor: '#BA1A1A',
   },
-  errorText: {
+  spacer: {
+    height: 10,
+  },
+  divider: {
+    height: 1,
+    width: '80%',
+    backgroundColor: Theme.colors.surfaceVariant,
+    marginVertical: 24,
+    opacity: 0.5,
+  },
+  toastContainer: {
+    position: 'absolute',
+    bottom: 50,
+    left: 20,
+    right: 20,
+    backgroundColor: '#BA1A1A',
+    borderRadius: 16,
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  toastText: {
     fontFamily: Theme.typography.bodyBold,
-    fontSize: 11,
-    color: '#BA1A1A',
-    marginTop: 6,
-    marginLeft: 4,
+    fontSize: 13,
+    color: '#FFF',
+    flex: 1,
   },
   activateBtn: {
     width: '100%',
@@ -351,5 +529,39 @@ const styles = StyleSheet.create({
     color: Theme.colors.outline,
     textAlign: 'center',
     marginTop: 10,
+  },
+  modalOverlay: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    padding: 24,
+    zIndex: 1000,
+  },
+  modalCard: {
+    backgroundColor: '#FFF',
+    borderRadius: 32,
+    padding: 32,
+    alignItems: 'center',
+  },
+  modalIcon: {
+    width: 64, height: 64, borderRadius: 32,
+    backgroundColor: Theme.colors.secondaryContainer,
+    justifyContent: 'center', alignItems: 'center',
+    marginBottom: 20,
+  },
+  modalTitle: {
+    fontFamily: Theme.typography.headlineBlack,
+    fontSize: 24,
+    color: '#000',
+    marginBottom: 8,
+  },
+  modalSub: {
+    fontFamily: Theme.typography.body,
+    fontSize: 14,
+    color: Theme.colors.outline,
+    textAlign: 'center',
+    marginBottom: 28,
+    lineHeight: 20,
   },
 });

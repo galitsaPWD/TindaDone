@@ -51,7 +51,7 @@ import { getTransactions, getProducts, saveTransaction, hasSeenWelcome, markWelc
 import { useSettings } from '../../context/SettingsContext';
 import { Product, TransactionItem, BusinessSettings, UtangRecord } from '../../lib/types';
 import { getTopSoldProducts } from '../../lib/calculations';
-import { getTrialStatus, isActivated, TrialStatus } from '../../lib/license';
+import { getTrialStatus, isActivated, syncTrialWithServer, TrialStatus } from '../../lib/license';
 import { Theme } from '../../constants/Theme';
 
 import * as ImagePicker from 'expo-image-picker';
@@ -60,6 +60,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 const { width } = Dimensions.get('window');
 
 export default function SellScreen() {
+  const router = useRouter();
   const { businessSettings, updateSettings } = useSettings();
   const [products, setProducts] = useState<Product[]>([]);
   const [filteredProducts, setFilteredProducts] = useState<Product[]>([]);
@@ -174,11 +175,17 @@ export default function SellScreen() {
   };
 
   const checkLicense = async () => {
-    const isAct = await isActivated();
-    setActivated(isAct);
-    if (!isAct) {
-      const status = await getTrialStatus();
-      setTrial(status);
+    const active = await isActivated();
+    setActivated(active);
+    
+    // HYBRID SYNC: Silent check with server in background
+    await syncTrialWithServer();
+    
+    const status = await getTrialStatus();
+    setTrial(status);
+    
+    if (!active && status.expired) {
+      router.replace('/activate');
     }
   };
 
@@ -644,7 +651,7 @@ export default function SellScreen() {
               style={styles.qtyInput}
               keyboardType="numeric"
               value={tempQty}
-              onChangeText={setTempQty}
+              onChangeText={(t) => setTempQty(t.replace(/[^0-9]/g, ''))}
               autoFocus
               placeholder="0"
               placeholderTextColor={Theme.colors.outlineVariant}

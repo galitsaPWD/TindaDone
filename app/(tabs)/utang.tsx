@@ -372,7 +372,7 @@ export default function UtangScreen() {
                     placeholderTextColor={Theme.colors.outlineVariant}
                     keyboardType="numeric" 
                     value={manualAmount} 
-                    onChangeText={setManualAmount} 
+                    onChangeText={(t) => setManualAmount(t.replace(/[^0-9.]/g, ''))} 
                   />
                 </>
               )}

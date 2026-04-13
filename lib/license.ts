@@ -8,6 +8,9 @@ const DEVICE_ID_STORAGE_KEY = '@tindadone/device_id';
 const TRIAL_START_KEY = '@tindadone/trial_start';
 const TRIAL_DAYS = 3;
 
+// 🔗 Vercel Admin API URL
+const API_BASE_URL = 'https://tinda-done-admin.vercel.app'; // ← Change this to your live URL!
+
 // ⚠️ THIS MUST MATCH THE SECRET IN YOUR ADMIN PAGE — KEEP IT PRIVATE
 const ADMIN_SECRET = 'tindadone_admin_2025_zyxw';
 
@@ -52,10 +55,10 @@ export async function validateActivationKey(deviceCode: string, enteredKey: stri
   const hash = await sha256(deviceCode + ADMIN_SECRET);
   const clean = hash.toUpperCase().replace(/[^A-Z0-9]/g, '');
   const expected = `${clean.slice(0, 4)}${clean.slice(4, 8)}${clean.slice(8, 12)}`;
-  
+
   // Clean the entered key as well
   const enteredClean = enteredKey.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-  
+
   return enteredClean === expected;
 }
 
@@ -75,9 +78,45 @@ export async function saveActivation(): Promise<void> {
 }
 
 /** Starts the trial precisely now */
-export async function startTrial(): Promise<void> {
-  const now = Date.now().toString();
-  await AsyncStorage.setItem(TRIAL_START_KEY, now);
+export async function startTrial(storeName?: string): Promise<{ success: boolean; error?: string }> {
+  const deviceId = await getOrCreateDeviceId();
+
+  try {
+    // 1. Handshake with server
+    const response = await fetch(`${API_BASE_URL}/api/trial-start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceId, storeName: storeName || 'Unknown store' })
+    });
+
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || 'Server error');
+
+    // 2. Persist locally
+    const startTime = data.startTime || Date.now().toString();
+    await AsyncStorage.setItem(TRIAL_START_KEY, startTime);
+    return { success: true };
+  } catch (e) {
+    console.error('Trial start failed:', e);
+    return { success: false, error: e instanceof Error ? e.message : 'No internet connection. Trial requires 1-second handshake.' };
+  }
+}
+
+/** Silently syncs local trial with server record if possible */
+export async function syncTrialWithServer(): Promise<void> {
+  try {
+    const deviceId = await getOrCreateDeviceId();
+    const res = await fetch(`${API_BASE_URL}/api/trial-status?deviceId=${deviceId}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.exists && data.startTime) {
+        // If server says we have an older start date, honor the server (prevents reset)
+        await AsyncStorage.setItem(TRIAL_START_KEY, data.startTime);
+      }
+    }
+  } catch (e) {
+    // Fail silently in background
+  }
 }
 
 export type TrialStatus = {
@@ -95,25 +134,25 @@ export async function getTrialStatus(): Promise<TrialStatus> {
     if (!startStr) {
       return { active: false, daysLeft: TRIAL_DAYS, hoursLeft: TRIAL_DAYS * 24, expired: false, notStarted: true };
     }
-    
+
     const startTime = parseInt(startStr, 10);
     const now = Date.now();
     const elapsedMs = now - startTime;
     const elapsedHours = elapsedMs / (1000 * 60 * 60);
     const totalTrialHours = TRIAL_DAYS * 24;
-    
+
     if (elapsedHours >= totalTrialHours) {
       return { active: false, daysLeft: 0, hoursLeft: 0, expired: true, notStarted: false };
     }
-    
+
     const hoursRemaining = totalTrialHours - elapsedHours;
-    
-    return { 
-      active: true, 
+
+    return {
+      active: true,
       daysLeft: Math.ceil(hoursRemaining / 24),
       hoursLeft: Math.ceil(hoursRemaining),
-      expired: false, 
-      notStarted: false 
+      expired: false,
+      notStarted: false
     };
   } catch {
     return { active: false, daysLeft: 0, hoursLeft: 0, expired: false, notStarted: true };

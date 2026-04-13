@@ -596,7 +596,7 @@ export default function ProductsScreen() {
                      placeholderTextColor={Theme.colors.outlineVariant}
                      keyboardType="numeric" 
                      value={initialPacks} 
-                     onChangeText={setInitialPacks} 
+                     onChangeText={(t) => setInitialPacks(t.replace(/[^0-9]/g, ''))} 
                    />
                  </View>
                  <View style={{ flex: 1 }}>
@@ -607,7 +607,7 @@ export default function ProductsScreen() {
                      placeholderTextColor={Theme.colors.outlineVariant}
                      keyboardType="numeric" 
                      value={initialPieces} 
-                     onChangeText={setInitialPieces} 
+                     onChangeText={(t) => setInitialPieces(t.replace(/[^0-9]/g, ''))} 
                    />
                  </View>
                </View>
@@ -623,7 +623,7 @@ export default function ProductsScreen() {
                       placeholderTextColor={Theme.colors.outlineVariant}
                       keyboardType="numeric" 
                       value={initialPieces} 
-                      onChangeText={setInitialPieces} 
+                      onChangeText={(t) => setInitialPieces(t.replace(/[^0-9]/g, ''))} 
                     />
                   </View>
                 </View>
@@ -639,7 +639,7 @@ export default function ProductsScreen() {
                       placeholderTextColor={Theme.colors.outlineVariant}
                       keyboardType="numeric" 
                       value={piecesPerPack} 
-                      onChangeText={setPiecesPerPack} 
+                      onChangeText={(t) => updatePackSize(t.replace(/[^0-9]/g, ''))} 
                     />
                   </View>
                   <View style={{ flex: 1 }}>
@@ -650,7 +650,7 @@ export default function ProductsScreen() {
                       placeholderTextColor={Theme.colors.outlineVariant}
                       keyboardType="numeric" 
                       value={costPerPack} 
-                      onChangeText={updateCostFromPack} 
+                      onChangeText={(t) => updateCostFromPack(t.replace(/[^0-9.]/g, ''))} 
                     />
                   </View>
                 </View>
@@ -665,7 +665,7 @@ export default function ProductsScreen() {
                     placeholderTextColor={Theme.colors.outlineVariant}
                     keyboardType="numeric" 
                     value={costPrice} 
-                    onChangeText={updateCostFromPiece} 
+                    onChangeText={(t) => updateCostFromPiece(t.replace(/[^0-9.]/g, ''))} 
                   />
                 </View>
                 {isBulkMode && (
@@ -677,7 +677,7 @@ export default function ProductsScreen() {
                       placeholderTextColor={Theme.colors.outlineVariant}
                       keyboardType="numeric" 
                       value={packPrice} 
-                      onChangeText={updatePiecePriceFromPack} 
+                      onChangeText={(t) => updatePiecePriceFromPack(t.replace(/[^0-9.]/g, ''))} 
                     />
                   </View>
                 )}
@@ -692,7 +692,7 @@ export default function ProductsScreen() {
                    placeholderTextColor={Theme.colors.outlineVariant}
                    keyboardType="numeric" 
                    value={price} 
-                   onChangeText={setPrice} 
+                   onChangeText={(t) => updatePackPriceFromPiece(t.replace(/[^0-9.]/g, ''))} 
                  />
                </View>
              </View>
@@ -764,7 +764,7 @@ export default function ProductsScreen() {
                   placeholderTextColor={Theme.colors.outlineVariant}
                   keyboardType="numeric" 
                   value={threshold} 
-                  onChangeText={setThreshold} 
+                  onChangeText={(t) => setThreshold(t.replace(/[^0-9]/g, ''))} 
                 />
               </View>
             </View>
