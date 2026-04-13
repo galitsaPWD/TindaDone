@@ -14,6 +14,7 @@ import { useColorScheme } from '@/components/useColorScheme';
 import { Theme } from '@/constants/Theme';
 import { getBusinessSettings, saveBusinessSettings, exportData } from '../../lib/storage';
 import { BusinessSettings } from '../../lib/types';
+import { useSettings } from '../../context/SettingsContext';
 
 const { width } = Dimensions.get('window');
 const TAB_BAR_WIDTH = width;
@@ -84,51 +85,49 @@ function CustomTabBar({ state, descriptors, navigation }: any) {
 }
 
 export default function TabLayout() {
+  const { businessSettings, updateSettings } = useSettings();
   const [modalVisible, setModalVisible] = React.useState(false);
-  const [settings, setSettings] = React.useState<BusinessSettings>({
-    storeName: '',
-    scannerBeep: true,
-    scannerVibrate: true
-  });
-  const [tempName, setTempName] = React.useState('');
+  const [tempSettings, setTempSettings] = React.useState<BusinessSettings>({});
 
+  // Sync tempSettings with global settings when modal opens
   React.useEffect(() => {
-    loadSettings();
-  }, []);
-
-  const loadSettings = async () => {
-    const data = await getBusinessSettings();
-    setSettings({
-      ...data,
-      scannerBeep: data.scannerBeep ?? true,
-      scannerVibrate: data.scannerVibrate ?? true
-    });
-    setTempName(data.storeName || '');
-  };
+    if (modalVisible) {
+      setTempSettings(businessSettings);
+    }
+  }, [modalVisible, businessSettings]);
 
   const handleSave = async () => {
-    const updated = { ...settings, storeName: tempName };
-    await saveBusinessSettings(updated);
-    setSettings(updated);
+    await updateSettings(tempSettings);
     setModalVisible(false);
     Alert.alert('Success', 'Settings updated!');
   };
 
-  const toggleBeep = (val: boolean) => setSettings(prev => ({ ...prev, scannerBeep: val }));
-  const toggleVibrate = (val: boolean) => setSettings(prev => ({ ...prev, scannerVibrate: val }));
+  const toggleBeep = (val: boolean) => setTempSettings(prev => ({ ...prev, scannerBeep: val }));
+  const toggleVibrate = (val: boolean) => setTempSettings(prev => ({ ...prev, scannerVibrate: val }));
+  const toggleBulk = (val: boolean) => setTempSettings(prev => ({ ...prev, enableBulkMode: val }));
 
   const handlePickQR = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      allowsEditing: true,
-      quality: 0.5,
-      base64: true,
-    });
-    if (!result.canceled && result.assets && result.assets.length > 0) {
-      let finalUri = result.assets[0].uri;
-      if (result.assets[0].base64) {
-        finalUri = `data:image/jpeg;base64,${result.assets[0].base64}`;
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.3,
+        base64: true,
+      });
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        let finalUri = result.assets[0].uri;
+        if (result.assets[0].base64) {
+          const mimeType = result.assets[0].mimeType || 'image/jpeg';
+          finalUri = `data:${mimeType};base64,${result.assets[0].base64}`;
+        }
+        
+        const updated = { ...tempSettings, gcashQrUri: finalUri };
+        setTempSettings(updated);
+        Alert.alert('QR Staged', 'Your GCash QR Code is ready. Press Save Settings to apply changes.');
       }
-      setSettings(prev => ({ ...prev, gcashQrUri: finalUri }));
+    } catch (e) {
+      console.error('Error uploading QR:', e);
+      Alert.alert('Error', 'Failed to save QR code. The image may be too large.');
     }
   };
 
@@ -218,10 +217,23 @@ export default function TabLayout() {
                 <TextInput
                   style={styles.textInput}
                   placeholder="Store Name"
-                  value={tempName}
-                  onChangeText={setTempName}
+                  value={tempSettings.storeName || ''}
+                  onChangeText={(text) => setTempSettings(prev => ({ ...prev, storeName: text }))}
                 />
               </View>
+
+              <View style={[styles.toggleRow, { marginTop: 12 }]}>
+                <View style={styles.toggleLabelGroup}>
+                  <Package size={20} color={Theme.colors.onSurfaceVariant} />
+                  <Text style={styles.toggleText}>Bulk Selling Features</Text>
+                </View>
+                <Switch
+                  value={tempSettings.enableBulkMode !== false}
+                  onValueChange={toggleBulk}
+                  trackColor={{ false: '#767577', true: Theme.colors.primary }}
+                />
+              </View>
+              <Text style={[styles.settingHint, { marginTop: 8 }]}>Turn off to hide all pack/case selling options for a simpler experience.</Text>
             </View>
 
             <View style={styles.settingGroup}>
@@ -233,7 +245,7 @@ export default function TabLayout() {
                   <Text style={styles.toggleText}>Sound (Beep)</Text>
                 </View>
                 <Switch
-                  value={settings.scannerBeep}
+                  value={tempSettings.scannerBeep !== false}
                   onValueChange={toggleBeep}
                   trackColor={{ false: '#767577', true: Theme.colors.primary }}
                 />
@@ -245,7 +257,7 @@ export default function TabLayout() {
                   <Text style={styles.toggleText}>Vibration</Text>
                 </View>
                 <Switch
-                  value={settings.scannerVibrate}
+                  value={tempSettings.scannerVibrate !== false}
                   onValueChange={toggleVibrate}
                   trackColor={{ false: '#767577', true: Theme.colors.primary }}
                 />
@@ -257,10 +269,10 @@ export default function TabLayout() {
               
               <Text style={styles.settingHint}>Set your GCash QR code for quick customer payments.</Text>
               <TouchableOpacity style={styles.qrPickerBtn} onPress={handlePickQR}>
-                {settings.gcashQrUri ? (
+                {tempSettings.gcashQrUri ? (
                   <View style={styles.qrPreviewContainer}>
                     <Image 
-                      source={{ uri: settings.gcashQrUri }} 
+                      source={{ uri: tempSettings.gcashQrUri }} 
                       style={styles.qrThumbnail}
                       resizeMode="cover"
                     />
@@ -290,7 +302,7 @@ export default function TabLayout() {
           </ScrollView>
 
           <View style={styles.modalFooter}>
-            <TouchableOpacity style={styles.saveBtn} onPress={() => setModalVisible(false)}>
+            <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                 <CheckCircle2 size={20} color="#FFF" />
                 <Text style={styles.saveBtnText}>Save Settings</Text>

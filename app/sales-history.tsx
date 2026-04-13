@@ -5,8 +5,8 @@ import {
   StyleSheet, 
   FlatList, 
   TouchableOpacity, 
-  SafeAreaView 
-} from 'react-native';
+  } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { ChevronLeft, ReceiptText, Smartphone, ShoppingBasket, Calendar, Filter, Wallet } from 'lucide-react-native';
 import { getTransactions } from '../lib/storage';

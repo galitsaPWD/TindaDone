@@ -2,6 +2,8 @@ export type Product = {
   id: string;
   name: string;
   price: number;
+  packPrice?: number;
+  piecesPerPack?: number;
   costPrice?: number;
   unit?: string;
   stock: number;
@@ -16,6 +18,7 @@ export type TransactionItem = {
   productId: string;
   productName: string;
   qty: number;
+  isPack?: boolean;
   priceAtSale: number;
   costPriceAtSale?: number;
 };
@@ -48,6 +51,10 @@ export type RestockLog = {
   costPerUnit?: number;
   totalCost?: number;
   timestamp: string;
+  priceAtRestock?: number;
+  packPriceAtRestock?: number;
+  piecesPerPackAtRestock?: number;
+  isBulk?: boolean;
 };
 
 export type BusinessSettings = {
@@ -55,4 +62,5 @@ export type BusinessSettings = {
   storeName?: string;
   scannerBeep?: boolean;
   scannerVibrate?: boolean;
+  enableBulkMode?: boolean;
 };

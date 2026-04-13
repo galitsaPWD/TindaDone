@@ -27,6 +27,7 @@ import {
 
 import { useColorScheme } from '@/components/useColorScheme';
 import { Theme } from '../constants/Theme';
+import { SettingsProvider } from '../context/SettingsContext';
 
 export {
   // Catch any errors thrown by the Layout component.
@@ -80,7 +81,11 @@ export default function RootLayout() {
     return null;
   }
 
-  return <RootLayoutNav />;
+  return (
+    <SettingsProvider>
+      <RootLayoutNav />
+    </SettingsProvider>
+  );
 }
 
 function RootLayoutNav() {
@@ -104,7 +109,7 @@ function RootLayoutNav() {
 
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack screenOptions={{ contentStyle: { backgroundColor: Theme.colors.background } }}>
+      <Stack screenOptions={{ contentStyle: { backgroundColor: Theme.colors.background }, headerShown: false }}>
         <Stack.Screen name="activate" options={{ headerShown: false }} />
         {canEnter && (
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />

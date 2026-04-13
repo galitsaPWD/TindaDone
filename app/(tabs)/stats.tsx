@@ -28,32 +28,41 @@ import {
   X, 
   FileText, 
   CheckCircle2,
-  Package
+  Package,
+  BarChart2
 } from 'lucide-react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { 
-  getTodaysTransactions, 
+  getTransactions, 
   getProducts, 
-  getBusinessSettings,
   saveBusinessSettings,
   getUtangRecords
 } from '../../lib/storage';
+import { useSettings } from '../../context/SettingsContext';
 import { calculateTodaysSales, calculateTodaysProfit, getPaymentBreakdown } from '../../lib/calculations';
-import { Transaction, Product, BusinessSettings } from '../../lib/types';
+import { Transaction, Product } from '../../lib/types';
 import { Theme } from '../../constants/Theme';
 
 const { width } = Dimensions.get('window');
 
 export default function StatsScreen() {
   const router = useRouter();
+  const [allTransactions, setAllTransactions] = useState<Transaction[]>([]);
+  const [allProducts, setAllProducts] = useState<Product[]>([]);
+  const [period, setPeriod] = useState<'daily' | 'monthly' | 'yearly'>('daily');
+  const [chartData, setChartData] = useState<{label: string, value: number, height: number, transactions: Transaction[]}[]>([]);
+  const [showChart, setShowChart] = useState(true);
+  const [selectedChartIndex, setSelectedChartIndex] = useState<number | null>(null);
+  const [periodTransactions, setPeriodTransactions] = useState<Transaction[]>([]);
+  
   const [todaysSales, setTodaysSales] = useState(0);
   const [todaysProfit, setTodaysProfit] = useState(0);
   const [paymentStats, setPaymentStats] = useState({ cash: 0, gcash: 0 });
   const [lowStockItems, setLowStockItems] = useState<Product[]>([]);
   const [recentTransactions, setRecentTransactions] = useState<Transaction[]>([]);
   
-  const [businessSettings, setBusinessSettings] = useState<BusinessSettings>({});
+  const { businessSettings } = useSettings();
   const [totalInventoryValue, setTotalInventoryValue] = useState(0);
   const [totalDebt, setTotalDebt] = useState(0);
   const [showCloseout, setShowCloseout] = useState(false);
@@ -65,23 +74,100 @@ export default function StatsScreen() {
   );
 
   const loadData = async () => {
-    const transactions = await getTodaysTransactions();
+    const transactions = await getTransactions();
     const products = await getProducts();
-    const settings = await getBusinessSettings();
     const utang = await getUtangRecords();
 
-    setTodaysSales(calculateTodaysSales(transactions));
-    setTodaysProfit(calculateTodaysProfit(transactions, products));
-    setPaymentStats(getPaymentBreakdown(transactions));
-    setBusinessSettings(settings);
-    
-    setRecentTransactions(transactions.slice(0, 5));
-    setLowStockItems(products.filter(p => p.stock <= p.lowStockThreshold).slice(0, 5));
+    setAllTransactions(transactions);
+    setAllProducts(products);
 
-    // New Summaries
+    setLowStockItems(products.filter(p => p.stock <= p.lowStockThreshold).slice(0, 5));
     setTotalInventoryValue(products.reduce((sum, p) => sum + (p.price * p.stock), 0));
     setTotalDebt(utang.filter(r => !r.isPaid).reduce((sum, r) => sum + r.amount, 0));
   };
+
+  useEffect(() => {
+    setSelectedChartIndex(null); // reset selection on period change
+    
+    const now = new Date();
+    const localNow = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+    const todayStr = localNow.toISOString().split('T')[0];
+    const monthStr = localNow.toISOString().slice(0, 7);
+    const yearStr = localNow.getFullYear().toString();
+
+    let filtered = allTransactions;
+    if (period === 'daily') {
+      filtered = allTransactions.filter(t => t.timestamp.startsWith(todayStr));
+    } else if (period === 'monthly') {
+      filtered = allTransactions.filter(t => t.timestamp.startsWith(monthStr));
+    } else if (period === 'yearly') {
+      filtered = allTransactions.filter(t => t.timestamp.startsWith(yearStr));
+    }
+    setPeriodTransactions(filtered);
+
+    // --- Chart Data Calculation ---
+    let newChartData: {label: string, value: number, height: number, transactions: Transaction[]}[] = [];
+    if (period === 'daily') {
+      const days = [];
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(localNow.getTime() - i * 24 * 60 * 60 * 1000);
+        days.push(d.toISOString().split('T')[0]);
+      }
+      const values = days.map(dayStr => {
+        const dayTrans = allTransactions.filter(t => t.timestamp.startsWith(dayStr));
+        const daySales = dayTrans.reduce((s, t) => s + t.total, 0);
+        return { label: new Date(dayStr).toLocaleDateString('en-US', { weekday: 'short' }), value: daySales, transactions: dayTrans };
+      });
+      const maxVal = Math.max(...values.map(v => v.value), 1) || 1;
+      newChartData = values.map(v => ({ ...v, height: (v.value / maxVal) * 100 }));
+    } else if (period === 'monthly') {
+      const values = [1, 2, 3, 4].map(week => {
+        const weekTrans = filtered.filter(t => {
+          const d = new Date(t.timestamp).getDate();
+          if (week === 1) return d >= 1 && d <= 7;
+          if (week === 2) return d >= 8 && d <= 14;
+          if (week === 3) return d >= 15 && d <= 21;
+          if (week === 4) return d >= 22;
+          return false;
+        });
+        const weekSales = weekTrans.reduce((s, t) => s + t.total, 0);
+        return { label: `W${week}`, value: weekSales, transactions: weekTrans };
+      });
+      const maxVal = Math.max(...values.map(v => v.value), 1) || 1;
+      newChartData = values.map(v => ({ ...v, height: (v.value / maxVal) * 100 }));
+    } else if (period === 'yearly') {
+      const months = [];
+      for (let i = 5; i >= 0; i--) {
+        const d = new Date(localNow.getFullYear(), localNow.getMonth() - i, 1);
+        months.push({ 
+          str: new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 7), 
+          label: d.toLocaleDateString('en-US', { month: 'short' }) 
+        });
+      }
+      const values = months.map(m => {
+        const mTrans = allTransactions.filter(t => t.timestamp.startsWith(m.str));
+        const mSales = mTrans.reduce((s, t) => s + t.total, 0);
+        return { label: m.label, value: mSales, transactions: mTrans };
+      });
+      const maxVal = Math.max(...values.map(v => v.value), 1) || 1;
+      newChartData = values.map(v => ({ ...v, height: (v.value / maxVal) * 100 }));
+    }
+    setChartData(newChartData);
+  }, [period, allTransactions]);
+
+  useEffect(() => {
+    let activeData = periodTransactions;
+    if (selectedChartIndex !== null && chartData[selectedChartIndex]) {
+      activeData = chartData[selectedChartIndex].transactions;
+    }
+
+    setTodaysSales(calculateTodaysSales(activeData));
+    setTodaysProfit(calculateTodaysProfit(activeData, allProducts));
+    setPaymentStats(getPaymentBreakdown(activeData));
+    
+    const recent = [...activeData].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    setRecentTransactions(recent.slice(0, 5));
+  }, [periodTransactions, chartData, selectedChartIndex, allProducts]);
 
 
 
@@ -95,15 +181,59 @@ export default function StatsScreen() {
   return (
     <View style={styles.container}>
       <ScrollView contentContainerStyle={[styles.content, { paddingBottom: 110 }]}>
+        {/* Period Selector Tabs */}
+        <View style={styles.periodTabs}>
+          {['daily', 'monthly', 'yearly'].map((p) => (
+            <TouchableOpacity 
+              key={p} 
+              style={[styles.periodTab, period === p && styles.periodTabActive]}
+              onPress={() => setPeriod(p as any)}
+            >
+              <Text style={[styles.periodTabText, period === p && styles.periodTabTextActive]}>
+                {p.charAt(0).toUpperCase() + p.slice(1)}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
         {/* Revenue Hero */}
         <View style={styles.heroSection}>
-          <Text style={styles.heroLabel}>TODAY'S REVENUE</Text>
-          <Text style={styles.heroValue}>₱{todaysSales.toLocaleString()}</Text>
-          
-          <View style={styles.profitBadge}>
-            <TrendingUp size={14} color={Theme.colors.onPrimaryContainer} style={{ marginRight: 6 }} />
-            <Text style={styles.profitText}>Est. Profit: ₱{todaysProfit.toLocaleString()}</Text>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <View>
+              <Text style={styles.heroLabel}>
+                {selectedChartIndex !== null ? chartData[selectedChartIndex].label.toUpperCase() : period.toUpperCase()} REVENUE
+              </Text>
+              <Text style={styles.heroValue}>₱{todaysSales.toLocaleString()}</Text>
+              <View style={styles.profitBadge}>
+                <TrendingUp size={14} color={Theme.colors.onPrimaryContainer} style={{ marginRight: 6 }} />
+                <Text style={styles.profitText}>Est. Profit: ₱{todaysProfit.toLocaleString()}</Text>
+              </View>
+            </View>
+            <TouchableOpacity onPress={() => setShowChart(!showChart)} style={styles.chartToggleBtn}>
+              <BarChart2 size={24} color={Theme.colors.onPrimaryContainer} opacity={showChart ? 1 : 0.5} />
+            </TouchableOpacity>
           </View>
+
+          {/* Dynamic Micro-Chart */}
+          {showChart && (
+            <View style={styles.chartContainer}>
+              {chartData.map((d, i) => {
+                const isActive = selectedChartIndex === null || selectedChartIndex === i;
+                return (
+                  <TouchableOpacity 
+                    key={i} 
+                    style={[styles.chartBarCol, { opacity: isActive ? 1 : 0.4 }]}
+                    onPress={() => setSelectedChartIndex(selectedChartIndex === i ? null : i)}
+                  >
+                    <View style={styles.chartBarTrack}>
+                      <View style={[styles.chartBarFill, { height: `${d.height}%` }]} />
+                    </View>
+                    <Text style={[styles.chartLabel, isActive && styles.chartLabelActive]} numberOfLines={1}>{d.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
         </View>
 
         {/* Quick Summaries Bento */}
@@ -169,7 +299,7 @@ export default function StatsScreen() {
           <View style={styles.sectionHeader}>
             <View style={styles.sectionTitleRow}>
               <History size={20} color={Theme.colors.onSurface} />
-              <Text style={styles.sectionTitle}>Recent Sales</Text>
+              <Text style={styles.sectionTitle}>{period.charAt(0).toUpperCase() + period.slice(1)} Sales</Text>
             </View>
             <TouchableOpacity onPress={() => router.push('/sales-history')}>
               <Text style={styles.viewAllText}>History</Text>
@@ -286,6 +416,36 @@ const styles = StyleSheet.create({
     padding: 24,
     paddingBottom: 120,
   },
+  periodTabs: {
+    flexDirection: 'row',
+    backgroundColor: Theme.colors.surfaceVariant,
+    borderRadius: 20,
+    padding: 4,
+    marginBottom: 20,
+  },
+  periodTab: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+    borderRadius: 16,
+  },
+  periodTabActive: {
+    backgroundColor: '#FFF',
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+  },
+  periodTabText: {
+    fontFamily: Theme.typography.bodySemiBold,
+    color: Theme.colors.outline,
+    fontSize: 14,
+  },
+  periodTabTextActive: {
+    color: '#000',
+    fontFamily: Theme.typography.headline,
+  },
   heroSection: {
     marginBottom: 24,
     backgroundColor: Theme.colors.primaryContainer,
@@ -318,6 +478,46 @@ const styles = StyleSheet.create({
     fontFamily: Theme.typography.bodyBold,
     color: Theme.colors.onPrimaryContainer,
     fontSize: 13,
+  },
+  chartContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    height: 100,
+    marginTop: 30,
+    paddingTop: 15,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.1)',
+  },
+  chartBarCol: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  chartBarTrack: {
+    height: 50,
+    width: 14,
+    borderRadius: 7,
+    justifyContent: 'flex-end',
+    marginBottom: 8,
+  },
+  chartBarFill: {
+    width: '100%',
+    backgroundColor: Theme.colors.onPrimaryContainer,
+    borderRadius: 7,
+  },
+  chartLabel: {
+    fontFamily: Theme.typography.bodyMedium,
+    color: 'rgba(255,255,255,0.5)',
+    fontSize: 10,
+  },
+  chartLabelActive: {
+    color: 'rgba(255,255,255,1)',
+    fontFamily: Theme.typography.bodyBold,
+  },
+  chartToggleBtn: {
+    padding: 8,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderRadius: 12,
   },
   actionGrid: {
     flexDirection: 'row',

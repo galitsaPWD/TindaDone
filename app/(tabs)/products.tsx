@@ -11,12 +11,12 @@ import {
   Image,
   Dimensions,
   ScrollView,
-  SafeAreaView,
   InteractionManager,
   Platform,
   ActionSheetIOS,
   Vibration
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import { 
   Search, 
@@ -26,21 +26,28 @@ import {
   ChevronRight, 
   Camera, 
   X,
-  ChevronLeft
+  ChevronLeft,
+  Zap,
+  TrendingUp,
+  CheckCircle2,
+  Info,
+  Tag
 } from 'lucide-react-native';
 import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Audio } from 'expo-av';
-import { getProducts, addProduct, CATEGORIES, getBusinessSettings } from '../../lib/storage';
+import { getProducts, addProduct, CATEGORIES } from '../../lib/storage';
+import { useSettings } from '../../context/SettingsContext';
 import { Product, BusinessSettings } from '../../lib/types';
 import { Theme } from '../../constants/Theme';
 
-const { width } = Dimensions.get('window');
+const { width, height } = Dimensions.get('window');
 
 export default function ProductsScreen() {
   const router = useRouter();
   const { filter } = useLocalSearchParams();
+  const { businessSettings } = useSettings();
   const [products, setProducts] = useState<Product[]>([]);
   const [filteredProducts, setFilteredProducts] = useState<Product[]>([]);
   const [search, setSearch] = useState('');
@@ -56,12 +63,33 @@ export default function ProductsScreen() {
   const [threshold, setThreshold] = useState('5');
   const [barcode, setBarcode] = useState('');
   const [photoUri, setPhotoUri] = useState<string | undefined>(undefined);
+  const [piecesPerPack, setPiecesPerPack] = useState('1');
+  const [packPrice, setPackPrice] = useState('0');
+  const [initialPacks, setInitialPacks] = useState('0');
+  const [initialPieces, setInitialPieces] = useState('0');
+  const [costPerPack, setCostPerPack] = useState('');
+  const [hasManuallySetPrice, setHasManuallySetPrice] = useState(false);
+  const [hasManuallySetPackPrice, setHasManuallySetPackPrice] = useState(false);
   const [showErrors, setShowErrors] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
+  const [isBulkMode, setIsBulkMode] = useState(false);
+  
+  // Custom Alert State
+  const [alertVisible, setAlertVisible] = useState(false);
+  const [alertConfig, setAlertConfig] = useState<{
+    title: string;
+    message: string;
+    type: 'success' | 'error' | 'warning' | 'info';
+    onConfirm?: () => void;
+  }>({ title: '', message: '', type: 'info' });
+
+  const showAlert = (title: string, message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info', onConfirm?: () => void) => {
+    setAlertConfig({ title, message, type, onConfirm });
+    setAlertVisible(true);
+  };
   
   const [permission, requestPermission] = useCameraPermissions();
   const beepSound = useRef<Audio.Sound | null>(null);
-  const [businessSettings, setBusinessSettings] = useState<BusinessSettings>({});
 
   // Stats
   const [totalValue, setTotalValue] = useState(0);
@@ -72,7 +100,6 @@ export default function ProductsScreen() {
       const task = InteractionManager.runAfterInteractions(() => {
         loadProducts();
         loadBeep();
-        loadSettings();
         if (filter === 'lowStock') {
           setIsLowStockFilterExplicitlyActive(true);
         }
@@ -122,14 +149,14 @@ export default function ProductsScreen() {
     setProducts(sanitizedData);
   };
 
-  const handlePickImage = async (useCamera: boolean) => {
+  const handlePickImage = async (useCamera: boolean = false) => {
     try {
       const permission = useCamera 
         ? await ImagePicker.requestCameraPermissionsAsync() 
         : await ImagePicker.requestMediaLibraryPermissionsAsync();
 
       if (permission.status !== 'granted') {
-        Alert.alert('Permission Denied', 'We need access to your photos to add a product image.');
+        showAlert('Permission Denied', 'We need access to your photos to add a product image.', 'warning');
         return;
       }
 
@@ -171,24 +198,31 @@ export default function ProductsScreen() {
       }
     } catch (error) {
       console.error('Image picker error:', error);
-      Alert.alert('Error', 'Failed to pick image');
+      showAlert('Error', 'Failed to pick image', 'error');
     }
   };
 
   const handleSave = async () => {
-    if (!name || !price) {
+    if (!name || !price || !category || !unit || !costPrice) {
       setShowErrors(true);
-      Alert.alert('Missing Fields', 'Please enter at least the product name and price.');
+      showAlert('Missing Fields', 'Please fill in all boxes marked in red.', 'warning');
       return;
     }
 
     try {
-      const productData: Product = {
+      const multiplier = isBulkMode ? (parseInt(piecesPerPack) || 1) : 1;
+      const totalInitialStock = isBulkMode 
+        ? (parseInt(initialPacks) || 0) * multiplier + (parseInt(initialPieces) || 0)
+        : (parseInt(initialPieces) || 0);
+
+      const newProduct: Product = {
         id: Date.now().toString(),
-        name,
+        name: name.trim(),
         price: parseFloat(price),
+        packPrice: isBulkMode ? (parseFloat(packPrice) || undefined) : undefined,
+        piecesPerPack: multiplier,
         costPrice: costPrice ? parseFloat(costPrice) : 0,
-        stock: 0, 
+        stock: totalInitialStock, 
         lowStockThreshold: threshold ? parseInt(threshold) : 5,
         category,
         unit: unit || 'pc',
@@ -197,14 +231,13 @@ export default function ProductsScreen() {
         createdAt: new Date().toISOString(),
       };
 
-      await addProduct(productData);
+      await addProduct(newProduct);
       setModalVisible(false);
       resetForm();
-      setShowErrors(false);
       loadProducts();
+      showAlert('Success', `${newProduct.name} registered!`, 'success');
     } catch (e) {
-      Alert.alert('Error Saving', 'Something went wrong while saving. The photo might be too large or your storage is full.');
-      console.error(e);
+      showAlert('Error', 'Failed to save product. The image might be too large.', 'error');
     }
   };
 
@@ -217,12 +250,109 @@ export default function ProductsScreen() {
     setThreshold('5');
     setBarcode('');
     setPhotoUri(undefined);
+    setInitialPacks('0');
+    setInitialPieces('0');
+    setCostPerPack('');
+    setIsBulkMode(false);
     setShowErrors(false);
   };
 
-  const loadSettings = async () => {
-    const data = await getBusinessSettings();
-    setBusinessSettings(data);
+
+  const getMarginInfo = (s: string, c: string) => {
+    const sVal = parseFloat(s) || 0;
+    const cVal = parseFloat(c) || 0;
+    if (sVal <= 0 || cVal <= 0) return null;
+    
+    const profit = sVal - cVal;
+    const margin = (profit / sVal) * 100;
+    return {
+      profit,
+      margin: margin.toFixed(1),
+      isLoss: profit < 0
+    };
+  };
+
+  const getDashboardData = () => {
+    const packs = parseInt(initialPacks) || 0;
+    const pieces = parseInt(initialPieces) || 0;
+    const multiplier = parseInt(piecesPerPack) || 1;
+    const totalUnits = (packs * multiplier) + pieces;
+    const uCost = parseFloat(costPrice) || 0;
+    const totalInvestment = totalUnits * uCost;
+    
+    const uMargin = getMarginInfo(price, costPrice);
+    const pMargin = getMarginInfo(packPrice, costPerPack);
+    
+    return {
+      totalUnits,
+      totalInvestment,
+      uMargin,
+      pMargin
+    };
+  };
+
+  const updateCostFromPack = (pCost: string) => {
+    setCostPerPack(pCost);
+    const multiplier = parseInt(piecesPerPack) || 1;
+    const costVal = parseFloat(pCost) || 0;
+    if (multiplier > 0 && costVal > 0) {
+      setCostPrice((costVal / multiplier).toFixed(2));
+    }
+  };
+
+  const updateCostFromPiece = (unitCost: string) => {
+    setCostPrice(unitCost);
+    const multiplier = parseInt(piecesPerPack) || 1;
+    const unitCostVal = parseFloat(unitCost) || 0;
+    if (multiplier > 0 && unitCostVal > 0) {
+      setCostPerPack((unitCostVal * multiplier).toFixed(2));
+    }
+  };
+
+  const updatePackSize = (size: string) => {
+    setPiecesPerPack(size);
+    const multiplier = parseInt(size) || 1;
+    const packCostVal = parseFloat(costPerPack) || 0;
+    if (multiplier > 0 && packCostVal > 0) {
+      setCostPrice((packCostVal / multiplier).toFixed(2));
+    }
+  };
+
+  // Smart Recommendation Engine (Cost + 5)
+  useEffect(() => {
+    if (modalVisible && !hasManuallySetPrice) {
+      const c = parseFloat(costPrice) || 0;
+      if (c > 0) setPrice((c + 5).toFixed(2));
+    }
+  }, [costPrice, modalVisible]);
+
+  useEffect(() => {
+    if (modalVisible && !hasManuallySetPackPrice) {
+      const cp = parseFloat(costPerPack) || 0;
+      if (cp > 0) setPackPrice((cp + 5).toString());
+    }
+  }, [costPerPack, modalVisible]);
+
+  const updatePackPriceFromPiece = (pieceVal: string) => {
+    setPrice(pieceVal);
+    setHasManuallySetPrice(true);
+    const multiplier = parseInt(piecesPerPack) || 1;
+    const piecePriceVal = parseFloat(pieceVal) || 0;
+    if (multiplier > 1 && piecePriceVal > 0) {
+      setPackPrice((piecePriceVal * multiplier).toString());
+      setHasManuallySetPackPrice(true);
+    }
+  };
+
+  const updatePiecePriceFromPack = (pPriceVal: string) => {
+    setPackPrice(pPriceVal);
+    setHasManuallySetPackPrice(true);
+    const multiplier = parseInt(piecesPerPack) || 1;
+    const pPriceValNum = parseFloat(pPriceVal) || 0;
+    if (multiplier > 1 && pPriceValNum > 0) {
+      setPrice((pPriceValNum / multiplier).toFixed(2));
+      setHasManuallySetPrice(true);
+    }
   };
 
   const loadBeep = async () => {
@@ -231,9 +361,7 @@ export default function ProductsScreen() {
         require('../../assets/beep.mp3')
       );
       beepSound.current = sound;
-    } catch (e) {
-      // Fallback silently if asset is missing (vibration still works)
-    }
+    } catch (e) {}
   };
 
   const playBeep = async () => {
@@ -253,14 +381,14 @@ export default function ProductsScreen() {
     setBarcode(data);
     setIsScanning(false);
     playBeep();
-    Alert.alert('Scan Success', `Barcode ${data} recorded!`);
+    showAlert('Barcode Found', `Scanned: ${data}`, 'success');
   };
 
   const startBarcodeScan = async () => {
     if (!permission?.granted) {
       const { granted } = await requestPermission();
       if (!granted) {
-        Alert.alert('Permission Denied', 'Camera permission is required to scan barcodes.');
+        showAlert('Permission Denied', 'Camera permission is required to scan barcodes.', 'warning');
         return;
       }
     }
@@ -378,17 +506,38 @@ export default function ProductsScreen() {
       {/* Add Product Modal */}
       <Modal visible={modalVisible} transparent animationType="slide">
         <View style={styles.modalOverlay}>
-          <ScrollView 
-            style={styles.sheetContent} 
-            contentContainerStyle={{ paddingBottom: 60 }}
-            showsVerticalScrollIndicator={false}
-          >
+          <View style={styles.sheetContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Add New Product</Text>
               <TouchableOpacity onPress={() => setModalVisible(false)}>
                 <X size={24} color={Theme.colors.outline} />
               </TouchableOpacity>
             </View>
+
+            {businessSettings.enableBulkMode !== false && (
+              <View style={styles.typeSelector}>
+                <TouchableOpacity 
+                  style={[styles.typeBtn, !isBulkMode && styles.typeBtnActive]}
+                  onPress={() => setIsBulkMode(false)}
+                >
+                  <Tag size={18} color={!isBulkMode ? '#FFF' : Theme.colors.outline} />
+                  <Text style={[styles.typeBtnText, !isBulkMode && styles.typeBtnTextActive]}>Single Item</Text>
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  style={[styles.typeBtn, isBulkMode && styles.typeBtnActive]}
+                  onPress={() => setIsBulkMode(true)}
+                >
+                  <Package size={18} color={isBulkMode ? '#FFF' : Theme.colors.outline} />
+                  <Text style={[styles.typeBtnText, isBulkMode && styles.typeBtnTextActive]}>Bulk Packs</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            <ScrollView 
+              style={styles.modalScroll} 
+              contentContainerStyle={{ paddingBottom: 60 }}
+              showsVerticalScrollIndicator={false}
+            >
 
             <View style={styles.imagePickerSection}>
               <TouchableOpacity 
@@ -428,39 +577,160 @@ export default function ProductsScreen() {
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.inputLabel}>PRODUCT NAME</Text>
-            <TextInput 
-              style={[styles.input, showErrors && !name && styles.errorInput]} 
-              placeholder="e.g. Coke Mismo" 
-              placeholderTextColor={Theme.colors.outlineVariant}
-              value={name} 
-              onChangeText={setName} 
-            />
+             <Text style={styles.inputLabel}>PRODUCT NAME</Text>
+             <TextInput 
+               style={[styles.input, showErrors && !name && styles.errorInput]} 
+               placeholder="e.g. Coke Mismo" 
+               placeholderTextColor={Theme.colors.outlineVariant}
+               value={name} 
+               onChangeText={setName} 
+             />
 
-            <View style={styles.inputRow}>
-              <View style={{ flex: 1, marginRight: 12 }}>
-                <Text style={styles.inputLabel}>SELLING PRICE (₱)</Text>
-                <TextInput 
-                  style={[styles.input, showErrors && !price && styles.errorInput]} 
-                  placeholder="0" 
-                  placeholderTextColor={Theme.colors.outlineVariant}
-                  keyboardType="numeric" 
-                  value={price} 
-                  onChangeText={setPrice} 
-                />
+             {isBulkMode && (
+               <View style={styles.inputRow}>
+                 <View style={{ flex: 1, marginRight: 12 }}>
+                   <Text style={styles.inputLabel}>INITIAL STOCK (Packs)</Text>
+                   <TextInput 
+                     style={styles.input} 
+                     placeholder="0" 
+                     placeholderTextColor={Theme.colors.outlineVariant}
+                     keyboardType="numeric" 
+                     value={initialPacks} 
+                     onChangeText={setInitialPacks} 
+                   />
+                 </View>
+                 <View style={{ flex: 1 }}>
+                   <Text style={styles.inputLabel}>EXTRA LOOSE UNITS</Text>
+                   <TextInput 
+                     style={styles.input} 
+                     placeholder="0" 
+                     placeholderTextColor={Theme.colors.outlineVariant}
+                     keyboardType="numeric" 
+                     value={initialPieces} 
+                     onChangeText={setInitialPieces} 
+                   />
+                 </View>
+               </View>
+              )}
+
+              {!isBulkMode && (
+                <View style={[styles.inputRow, { marginBottom: 12 }]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.inputLabel}>INITIAL STOCK (Pieces)</Text>
+                    <TextInput 
+                      style={styles.input} 
+                      placeholder="0" 
+                      placeholderTextColor={Theme.colors.outlineVariant}
+                      keyboardType="numeric" 
+                      value={initialPieces} 
+                      onChangeText={setInitialPieces} 
+                    />
+                  </View>
+                </View>
+              )}
+
+              {isBulkMode && (
+                <View style={styles.inputRow}>
+                  <View style={{ flex: 1, marginRight: 12 }}>
+                    <Text style={styles.inputLabel}>PCS PER PACK</Text>
+                    <TextInput 
+                      style={styles.input} 
+                      placeholder="1" 
+                      placeholderTextColor={Theme.colors.outlineVariant}
+                      keyboardType="numeric" 
+                      value={piecesPerPack} 
+                      onChangeText={setPiecesPerPack} 
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.inputLabel}>PACK COST (Buying ₱)</Text>
+                    <TextInput 
+                      style={styles.input} 
+                      placeholder="0" 
+                      placeholderTextColor={Theme.colors.outlineVariant}
+                      keyboardType="numeric" 
+                      value={costPerPack} 
+                      onChangeText={updateCostFromPack} 
+                    />
+                  </View>
+                </View>
+              )}
+
+              <View style={styles.inputRow}>
+                <View style={{ flex: 1, marginRight: isBulkMode ? 12 : 0 }}>
+                  <Text style={styles.inputLabel}>UNIT COST (Buying ₱)</Text>
+                  <TextInput 
+                    style={[styles.input, showErrors && !costPrice && styles.errorInput]} 
+                    placeholder="0" 
+                    placeholderTextColor={Theme.colors.outlineVariant}
+                    keyboardType="numeric" 
+                    value={costPrice} 
+                    onChangeText={updateCostFromPiece} 
+                  />
+                </View>
+                {isBulkMode && (
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.inputLabel}>PACK PRICE (Selling ₱)</Text>
+                    <TextInput 
+                      style={styles.input} 
+                      placeholder="0" 
+                      placeholderTextColor={Theme.colors.outlineVariant}
+                      keyboardType="numeric" 
+                      value={packPrice} 
+                      onChangeText={updatePiecePriceFromPack} 
+                    />
+                  </View>
+                )}
               </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.inputLabel}>COST PRICE (₱)</Text>
-                <TextInput 
-                  style={[styles.input, showErrors && !costPrice && styles.errorInput]} 
-                  placeholder="0" 
-                  placeholderTextColor={Theme.colors.outlineVariant}
-                  keyboardType="numeric" 
-                  value={costPrice} 
-                  onChangeText={setCostPrice} 
-                />
-              </View>
-            </View>
+
+             <View style={styles.inputRow}>
+               <View style={{ flex: 1 }}>
+                 <Text style={styles.inputLabel}>UNIT PRICE (Selling ₱)</Text>
+                 <TextInput 
+                   style={[styles.input, showErrors && !price && styles.errorInput]} 
+                   placeholder="0" 
+                   placeholderTextColor={Theme.colors.outlineVariant}
+                   keyboardType="numeric" 
+                   value={price} 
+                   onChangeText={setPrice} 
+                 />
+               </View>
+             </View>
+
+             {/* Dashboard Summary */}
+             <View style={styles.insightBox}>
+               <View style={styles.insightRow}>
+                 <Package size={14} color={Theme.colors.primary} />
+                 <Text style={styles.insightText}>
+                   Opening Stock: {getDashboardData().totalUnits || 0} units
+                 </Text>
+               </View>
+               
+               <View style={styles.insightRow}>
+                 <Zap size={14} color={Theme.colors.primary} />
+                 <Text style={styles.insightText}>
+                   Total Investment: ₱{getDashboardData().totalInvestment.toFixed(2)}
+                 </Text>
+               </View>
+               
+               {getDashboardData().uMargin && (
+                  <View style={styles.insightRow}>
+                    <TrendingUp size={14} color={getDashboardData().uMargin?.isLoss ? Theme.colors.tertiary : Theme.colors.primary} />
+                    <Text style={[styles.insightText, getDashboardData().uMargin?.isLoss && { color: Theme.colors.tertiary }]}>
+                      Piece Margin: {getDashboardData().uMargin?.margin}% (₱{getDashboardData().uMargin?.profit.toFixed(2)} profit / unit)
+                    </Text>
+                  </View>
+                )}
+
+                {parseInt(piecesPerPack) > 1 && getDashboardData().pMargin && (
+                  <View style={styles.insightRow}>
+                    <TrendingUp size={14} color={getDashboardData().pMargin?.isLoss ? Theme.colors.tertiary : Theme.colors.primary} />
+                    <Text style={[styles.insightText, getDashboardData().pMargin?.isLoss && { color: Theme.colors.tertiary }]}>
+                      Pack Margin: {getDashboardData().pMargin?.margin}% (₱{getDashboardData().pMargin?.profit.toFixed(2)} profit / pack)
+                    </Text>
+                  </View>
+                )}
+             </View>
 
             <Text style={styles.inputLabel}>CATEGORY</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
@@ -518,6 +788,7 @@ export default function ProductsScreen() {
             </TouchableOpacity>
           </ScrollView>
         </View>
+      </View>
 
         {/* Inner Barcode Scanner Modal */}
         <Modal visible={isScanning} transparent animationType="fade">
@@ -530,12 +801,12 @@ export default function ProductsScreen() {
               }}
             />
             <View style={styles.scannerHUDOverlay}>
-              <View style={styles.scannerHUDHeaderInModal}>
+              <SafeAreaView style={styles.scannerHUDHeaderInModal}>
                 <Text style={styles.scannerHUDTitleInModal}>Register Barcode</Text>
-                <TouchableOpacity onPress={() => setIsScanning(false)}>
-                  <X size={24} color="#FFF" />
+                <TouchableOpacity onPress={() => setIsScanning(false)} style={{ padding: 12 }}>
+                  <X size={32} color="#FFF" />
                 </TouchableOpacity>
-              </View>
+              </SafeAreaView>
               <View style={styles.scannerCrosshair} />
               <View style={styles.scannerControls}>
                 <Text style={styles.scannerHint}>Align barcode within the frame</Text>
@@ -544,6 +815,34 @@ export default function ProductsScreen() {
             </View>
           </View>
         </Modal>
+      </Modal>
+
+      {/* Custom Alert Modal */}
+      <Modal visible={alertVisible} transparent animationType="fade">
+        <View style={{ flex: 1, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'center' }}>
+          <View style={styles.alertCard}>
+            {alertConfig.type === 'success' && <CheckCircle2 size={48} color={Theme.colors.primary} style={styles.alertIcon} />}
+            {alertConfig.type === 'error' && <X size={48} color={Theme.colors.tertiary} style={styles.alertIcon} />}
+            {alertConfig.type === 'warning' && <AlertTriangle size={48} color="#f59e0b" style={styles.alertIcon} />}
+            {alertConfig.type === 'info' && <Info size={48} color={Theme.colors.primary} style={styles.alertIcon} />}
+            
+            <Text style={styles.alertTitle}>{alertConfig.title}</Text>
+            <Text style={styles.alertMessage}>{alertConfig.message}</Text>
+            
+            <TouchableOpacity 
+              style={[
+                styles.alertBtn, 
+                { backgroundColor: alertConfig.type === 'error' || alertConfig.type === 'warning' ? Theme.colors.tertiary : Theme.colors.primary }
+              ]} 
+              onPress={() => {
+                setAlertVisible(false);
+                if (alertConfig.onConfirm) alertConfig.onConfirm();
+              }}
+            >
+              <Text style={styles.alertBtnText}>Got it</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -720,6 +1019,52 @@ const styles = StyleSheet.create({
     fontFamily: Theme.typography.bodyMedium,
     color: Theme.colors.outline,
     fontSize: 16,
+    marginTop: 12,
+  },
+  // Custom Alert Styles
+  alertCard: {
+    width: width * 0.85,
+    backgroundColor: Theme.colors.surface,
+    borderRadius: 32,
+    padding: 32,
+    alignItems: 'center',
+    // Premium shadow
+    elevation: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.35,
+    shadowRadius: 24,
+  },
+  alertIcon: {
+    marginBottom: 20,
+  },
+  alertTitle: {
+    fontFamily: Theme.typography.headlineBlack,
+    fontSize: 22,
+    color: Theme.colors.onSurface,
+    marginBottom: 8,
+    textAlign: 'center',
+    letterSpacing: -0.5,
+  },
+  alertMessage: {
+    fontFamily: Theme.typography.bodyMedium,
+    fontSize: 15,
+    color: Theme.colors.onSurfaceVariant,
+    textAlign: 'center',
+    marginBottom: 24,
+    lineHeight: 22,
+  },
+  alertBtn: {
+    width: '100%',
+    paddingVertical: 16,
+    borderRadius: 16,
+    alignItems: 'center',
+  },
+  alertBtnText: {
+    fontFamily: Theme.typography.headlineBlack,
+    color: '#FFF',
+    fontSize: 16,
+    letterSpacing: 0.5,
   },
   modalOverlay: {
     flex: 1,
@@ -731,6 +1076,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 32,
     borderTopRightRadius: 32,
     padding: 24,
+    minHeight: height * 0.85,
     maxHeight: '90%',
   },
   modalHeader: {
@@ -738,6 +1084,41 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 20,
+  },
+  typeSelector: {
+    flexDirection: 'row',
+    backgroundColor: Theme.colors.surfaceContainerLow,
+    borderRadius: 16,
+    padding: 4,
+    marginBottom: 24,
+  },
+  typeBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    borderRadius: 12,
+    gap: 8,
+  },
+  typeBtnActive: {
+    backgroundColor: Theme.colors.primary,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+  },
+  typeBtnText: {
+    fontFamily: Theme.typography.bodyBold,
+    fontSize: 13,
+    color: Theme.colors.outline,
+  },
+  typeBtnTextActive: {
+    color: '#FFF',
+  },
+  modalScroll: {
+    flex: 1,
   },
   modalTitle: {
     fontFamily: Theme.typography.headlineBlack,
@@ -868,7 +1249,7 @@ const styles = StyleSheet.create({
     fontFamily: Theme.typography.bodyBold,
     color: '#FFF',
     fontSize: 14,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: 'transparent',
     paddingHorizontal: 20,
     paddingVertical: 10,
     borderRadius: 20,
@@ -883,7 +1264,7 @@ const styles = StyleSheet.create({
   },
   scannerHUDOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.4)',
+    backgroundColor: 'transparent',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -897,7 +1278,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   scannerHUDTitleInModal: {
-    color: '#FFF',
+    color: Theme.colors.onSurface,
     fontFamily: Theme.typography.headlineBlack,
     fontSize: 20,
   },
@@ -909,12 +1290,31 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     backgroundColor: 'rgba(255,255,255,0.05)',
   },
+  insightBox: {
+    backgroundColor: Theme.colors.surfaceContainerLow,
+    borderRadius: 20,
+    padding: 16,
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: Theme.colors.outlineVariant + '20',
+  },
+  insightRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 4,
+  },
+  insightText: {
+    fontFamily: Theme.typography.bodyBold,
+    fontSize: 12,
+    color: Theme.colors.primary,
+  },
   lightingHint: {
     fontFamily: Theme.typography.bodyBold,
-    color: '#FFF',
+    color: Theme.colors.onSurface,
     fontSize: 12,
     marginTop: 12,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'transparent',
     paddingHorizontal: 16,
     paddingVertical: 6,
     borderRadius: 20,

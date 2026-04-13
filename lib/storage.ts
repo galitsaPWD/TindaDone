@@ -96,40 +96,9 @@ async function getMonthIndex(): Promise<string[]> {
   }
 }
 
-export const CATEGORIES = ['Beverages', 'Snacks', 'Canned Goods', 'Personal Care', 'Household', 'Others'];
+export const CATEGORIES = ['Food', 'Drinks', 'Personal Care', 'Household', 'Others'];
 
-const PRESET_PRODUCTS = [
-  { name: 'Coke 8oz', price: 15, category: 'Beverages' },
-  { name: 'Coke Mismo', price: 25, category: 'Beverages' },
-  { name: 'Royal 8oz', price: 15, category: 'Beverages' },
-  { name: 'Sprite 8oz', price: 15, category: 'Beverages' },
-  { name: 'C2 Apple', price: 20, category: 'Beverages' },
-  { name: 'C2 Green Tea', price: 20, category: 'Beverages' },
-  { name: 'Bear Brand 33g', price: 18, category: 'Beverages' },
-  { name: 'Milo Sachet', price: 12, category: 'Beverages' },
-  { name: 'Nescafe 3in1', price: 10, category: 'Beverages' },
-  { name: 'Lucky Me Pancit Canton Original', price: 18, category: 'Snacks' },
-  { name: 'Lucky Me Pancit Canton Chilimansi', price: 18, category: 'Snacks' },
-  { name: 'Lucky Me Beef Mami', price: 15, category: 'Snacks' },
-  { name: 'Nissin Cup Noodles', price: 25, category: 'Snacks' },
-  { name: 'Argentina Corned Beef 150g', price: 45, category: 'Canned Goods' },
-  { name: 'Ligo Sardines', price: 22, category: 'Canned Goods' },
-  { name: 'Century Tuna Flakes', price: 38, category: 'Canned Goods' },
-  { name: 'Pusit 55g', price: 35, category: 'Canned Goods' },
-  { name: 'Tide Powder 66g', price: 12, category: 'Household' },
-  { name: 'Ariel Powder 66g', price: 14, category: 'Household' },
-  { name: 'Head and Shoulders Sachet', price: 8, category: 'Personal Care' },
-  { name: 'Palmolive Shampoo Sachet', price: 7, category: 'Personal Care' },
-  { name: 'Safeguard Bar 60g', price: 35, category: 'Personal Care' },
-  { name: 'Colgate 25ml', price: 30, category: 'Personal Care' },
-  { name: 'Marlboro Red', price: 10, category: 'Others' },
-  { name: 'Marlboro Lights', price: 10, category: 'Others' },
-  { name: 'Winston Red', price: 8, category: 'Others' },
-  { name: 'Mentos Roll', price: 15, category: 'Snacks' },
-  { name: 'Chippy', price: 15, category: 'Snacks' },
-  { name: 'Piattos', price: 18, category: 'Snacks' },
-  { name: 'Magic Flakes', price: 8, category: 'Snacks' },
-];
+const PRESET_PRODUCTS: Array<{name: string, price: number, category: string}> = [];
 
 export async function getProducts(): Promise<Product[]> {
   try {
@@ -137,7 +106,8 @@ export async function getProducts(): Promise<Product[]> {
     if (!raw) {
       return await seedPresetProducts();
     }
-    return JSON.parse(raw);
+    const items: Product[] = JSON.parse(raw);
+    return items.filter(p => !p.id.startsWith('preset-'));
   } catch (e) {
     console.error('Error fetching products:', e);
     return [];
@@ -265,8 +235,11 @@ export async function saveTransaction(transaction: Transaction): Promise<void> {
     // VALIDATION: Check if stock is sufficient for all items
     for (const item of transaction.items) {
       const p = products.find(p => p.id === item.productId);
-      if (p && p.stock < item.qty) {
-        throw new Error(`Insufficient stock for ${p.name}. Only ${p.stock} remaining.`);
+      if (p) {
+        const deduction = item.isPack ? item.qty * (p.piecesPerPack || 1) : item.qty;
+        if (p.stock < deduction) {
+          throw new Error(`Insufficient stock for ${p.name}. Only ${p.stock} units remaining.`);
+        }
       }
     }
 
@@ -284,7 +257,8 @@ export async function saveTransaction(transaction: Transaction): Promise<void> {
     transaction.items.forEach(item => {
       const p = products.find(p => p.id === item.productId);
       if (p) {
-        p.stock -= item.qty;
+        const deduction = item.isPack ? item.qty * (p.piecesPerPack || 1) : item.qty;
+        p.stock -= deduction;
       }
     });
     await saveProducts(products);

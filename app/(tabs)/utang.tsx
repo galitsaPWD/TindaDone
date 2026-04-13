@@ -10,8 +10,8 @@ import {
   Alert,
   Image,
   ScrollView,
-  SafeAreaView
-} from 'react-native';
+  } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { 
   Plus, 
   User, 
@@ -20,12 +20,18 @@ import {
   X, 
   Contact,
   CreditCard,
-  Search
+  Search,
+  AlertTriangle,
+  Info
 } from 'lucide-react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { getUtangRecords, addUtangRecord, updateUtangRecord, markUtangPaid, deleteUtangRecord, getProducts, getBusinessSettings } from '../../lib/storage';
+import { getUtangRecords, addUtangRecord, updateUtangRecord, markUtangPaid, deleteUtangRecord, getProducts } from '../../lib/storage';
+import { useSettings } from '../../context/SettingsContext';
 import { UtangRecord, Product, TransactionItem } from '../../lib/types';
 import { Theme } from '../../constants/Theme';
+import { Dimensions } from 'react-native';
+
+const { width } = Dimensions.get('window');
 
 export default function UtangScreen() {
   const [records, setRecords] = useState<UtangRecord[]>([]);
@@ -45,11 +51,25 @@ export default function UtangScreen() {
   const [showErrors, setShowErrors] = useState(false);
   const [editingRecord, setEditingRecord] = useState<UtangRecord | null>(null);
 
+  // Custom Alert State
+  const [alertVisible, setAlertVisible] = useState(false);
+  const [alertConfig, setAlertConfig] = useState<{
+    title: string;
+    message: string;
+    type: 'success' | 'error' | 'warning' | 'info';
+    onConfirm?: () => void;
+  }>({ title: '', message: '', type: 'info' });
+
+  const showAlert = (title: string, message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info', onConfirm?: () => void) => {
+    setAlertConfig({ title, message, type, onConfirm });
+    setAlertVisible(true);
+  };
+
   // Payment Selection
   const [paymentModalVisible, setPaymentModalVisible] = useState(false);
   const [payingRecord, setPayingRecord] = useState<UtangRecord | null>(null);
   const [paymentStep, setPaymentStep] = useState<'choose' | 'confirm_gcash'>('choose');
-  const [businessSettings, setBusinessSettings] = useState<any>({});
+  const { businessSettings, updateSettings } = useSettings();
 
   // Stats
   const [totalOwed, setTotalOwed] = useState(0);
@@ -58,14 +78,8 @@ export default function UtangScreen() {
     useCallback(() => {
       loadRecords();
       loadProducts();
-      loadSettings();
     }, [])
   );
-
-  const loadSettings = async () => {
-    const settings = await getBusinessSettings();
-    setBusinessSettings(settings);
-  };
 
   useEffect(() => {
     if (!search) {
@@ -122,12 +136,12 @@ export default function UtangScreen() {
 
     if (!customerName || (!hasItems && !hasManual)) {
       setShowErrors(true);
-      Alert.alert('Missing Info', 'Please enter customer name and picked items or a manual amount.');
+      showAlert('Missing Info', 'Please enter customer name and picked items or a manual amount.', 'warning');
       return;
     }
 
     if (finalAmount <= 0) {
-      Alert.alert('Error', 'Amount must be greater than 0');
+      showAlert('Error', 'Amount must be greater than 0', 'error');
       return;
     }
 
@@ -178,7 +192,7 @@ export default function UtangScreen() {
     
     if (type === 'gcash') {
       if (!businessSettings.gcashQrUri) {
-        Alert.alert('No QR Code', 'Please upload your GCash QR code in the Settings first.');
+        showAlert('No QR Code', 'Please upload your GCash QR code in the Settings first.', 'warning');
         return;
       }
       if (paymentStep === 'choose') {
@@ -195,14 +209,10 @@ export default function UtangScreen() {
   };
 
   const handleDelete = async (id: string) => {
-    Alert.alert('Delete Record', 'Are you sure?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: async () => {
-          await deleteUtangRecord(id);
-          loadRecords();
-        }
-      }
-    ]);
+    showAlert('Delete Record', 'Are you sure you want to remove this debt record? This cannot be undone.', 'warning', async () => {
+      await deleteUtangRecord(id);
+      loadRecords();
+    });
   };
 
   const resetForm = () => {
@@ -488,6 +498,34 @@ export default function UtangScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Custom Alert Modal */}
+      <Modal visible={alertVisible} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.alertCard}>
+            {alertConfig.type === 'success' && <CheckCircle2 size={48} color={Theme.colors.primary} style={styles.alertIcon} />}
+            {alertConfig.type === 'error' && <X size={48} color={Theme.colors.tertiary} style={styles.alertIcon} />}
+            {alertConfig.type === 'warning' && <AlertTriangle size={48} color="#f59e0b" style={styles.alertIcon} />}
+            {alertConfig.type === 'info' && <Info size={48} color={Theme.colors.primary} style={styles.alertIcon} />}
+            
+            <Text style={styles.alertTitle}>{alertConfig.title}</Text>
+            <Text style={styles.alertMessage}>{alertConfig.message}</Text>
+            
+            <TouchableOpacity 
+              style={[
+                styles.alertBtn, 
+                { backgroundColor: alertConfig.type === 'error' || alertConfig.type === 'warning' ? Theme.colors.tertiary : Theme.colors.primary }
+              ]} 
+              onPress={() => {
+                setAlertVisible(false);
+                if (alertConfig.onConfirm) alertConfig.onConfirm();
+              }}
+            >
+              <Text style={styles.alertBtnText}>Got it</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -529,7 +567,7 @@ const styles = StyleSheet.create({
   overviewIcon: {
     width: 60,
     height: 60,
-    backgroundColor: 'rgba(255,255,255,0.2)',
+    backgroundColor: 'transparent',
     borderRadius: 18,
     justifyContent: 'center',
     alignItems: 'center',
@@ -655,6 +693,51 @@ const styles = StyleSheet.create({
     fontFamily: Theme.typography.bodyBold,
     color: Theme.colors.primary,
     fontSize: 10,
+  },
+  // Custom Alert Styles
+  alertCard: {
+    width: width * 0.85,
+    backgroundColor: Theme.colors.surface,
+    borderRadius: 32,
+    padding: 32,
+    alignItems: 'center',
+    // Premium shadow
+    elevation: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.35,
+    shadowRadius: 24,
+  },
+  alertIcon: {
+    marginBottom: 20,
+  },
+  alertTitle: {
+    fontFamily: Theme.typography.headlineBlack,
+    fontSize: 22,
+    color: Theme.colors.onSurface,
+    marginBottom: 8,
+    textAlign: 'center',
+    letterSpacing: -0.5,
+  },
+  alertMessage: {
+    fontFamily: Theme.typography.bodyMedium,
+    fontSize: 15,
+    color: Theme.colors.onSurfaceVariant,
+    textAlign: 'center',
+    marginBottom: 24,
+    lineHeight: 22,
+  },
+  alertBtn: {
+    width: '100%',
+    paddingVertical: 16,
+    borderRadius: 16,
+    alignItems: 'center',
+  },
+  alertBtnText: {
+    fontFamily: Theme.typography.headlineBlack,
+    color: '#FFF',
+    fontSize: 16,
+    letterSpacing: 0.5,
   },
   fab: {
     position: 'absolute',
@@ -842,7 +925,7 @@ const styles = StyleSheet.create({
   // Payment Modal Styles
   paymentModalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
+    backgroundColor: 'transparent',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,

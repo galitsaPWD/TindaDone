@@ -12,11 +12,11 @@ import {
   Dimensions,
   ActivityIndicator,
   ScrollView,
-  SafeAreaView,
   InteractionManager,
   Platform,
   Vibration
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { 
   Audio,
   InterruptionModeAndroid,
@@ -38,11 +38,17 @@ import {
   Camera,
   Store,
   QrCode,
-  ReceiptText
+  ReceiptText,
+  AlertTriangle,
+  Info,
+  Package,
+  Tag,
+  ArrowRightLeft
 } from 'lucide-react-native';
 import Animated, { SlideInDown, SlideOutDown, FadeInDown } from 'react-native-reanimated';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { getBusinessSettings, getTransactions, getProducts, saveTransaction, hasSeenWelcome, markWelcomeAsSeen, saveBusinessSettings, addUtangRecord } from '../../lib/storage';
+import { getTransactions, getProducts, saveTransaction, hasSeenWelcome, markWelcomeAsSeen, saveBusinessSettings, addUtangRecord } from '../../lib/storage';
+import { useSettings } from '../../context/SettingsContext';
 import { Product, TransactionItem, BusinessSettings, UtangRecord } from '../../lib/types';
 import { getTopSoldProducts } from '../../lib/calculations';
 import { getTrialStatus, isActivated, TrialStatus } from '../../lib/license';
@@ -54,18 +60,32 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 const { width } = Dimensions.get('window');
 
 export default function SellScreen() {
+  const { businessSettings, updateSettings } = useSettings();
   const [products, setProducts] = useState<Product[]>([]);
   const [filteredProducts, setFilteredProducts] = useState<Product[]>([]);
   const [cart, setCart] = useState<TransactionItem[]>([]);
   const [search, setSearch] = useState('');
   const [activeCategory, setActiveCategory] = useState<string>('All');
   const [paymentType, setPaymentType] = useState<'cash' | 'gcash'>('cash');
-  const [businessSettings, setBusinessSettings] = useState<BusinessSettings>({});
   const [topProducts, setTopProducts] = useState<any[]>([]);
   
+  // Custom Alert State
+  const [alertVisible, setAlertVisible] = useState(false);
+  const [alertConfig, setAlertConfig] = useState<{
+    title: string;
+    message: string;
+    type: 'success' | 'error' | 'warning' | 'info';
+    onConfirm?: () => void;
+  }>({ title: '', message: '', type: 'info' });
+
+  const showAlert = (title: string, message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info', onConfirm?: () => void) => {
+    setAlertConfig({ title, message, type, onConfirm });
+    setAlertVisible(true);
+  };
+
   const handlePaymentTypeChange = (type: 'cash' | 'gcash') => {
     if (type === 'gcash' && !businessSettings.gcashQrUri) {
-      Alert.alert('No QR Code', 'Please upload your GCash QR code in the Settings first.');
+      showAlert('No QR Code', 'Please upload your GCash QR code in the Settings first.', 'warning');
       return;
     }
     setPaymentType(type);
@@ -96,7 +116,6 @@ export default function SellScreen() {
     React.useCallback(() => {
       const task = InteractionManager.runAfterInteractions(() => {
         loadProducts();
-        loadSettings();
         checkLicense();
         checkFirstLaunch();
         loadBeep();
@@ -145,14 +164,13 @@ export default function SellScreen() {
 
   const handleSaveInitialSettings = async () => {
     if (!storeName.trim()) {
-      Alert.alert('Required', 'Please enter your store name to continue.');
+      showAlert('Required', 'Please enter your store name to continue.', 'warning');
       return;
     }
     const updated = { ...businessSettings, storeName: storeName.trim() };
-    await saveBusinessSettings(updated);
+    await updateSettings(updated);
     await markWelcomeAsSeen();
-    setBusinessSettings(updated);
-    Alert.alert('All Set!', `Welcome to TindaDone, ${storeName.trim()}!`);
+    showAlert('All Set!', `Welcome to TindaDone, ${storeName.trim()}!`, 'success');
   };
 
   const checkLicense = async () => {
@@ -207,15 +225,11 @@ export default function SellScreen() {
     setTopProducts(top);
   };
 
-  const loadSettings = async () => {
-    const settings = await getBusinessSettings();
-    setBusinessSettings(settings);
-  };
 
   const addToCart = (product: Product) => {
     // PRD: Stock Warning
     if (product.stock <= 0) {
-      Alert.alert('Low Stock Warning', `Note: "${product.name}" is out of stock. You can still proceed if needed.`);
+      showAlert('Low Stock Warning', `Note: "${product.name}" is out of stock. You can still proceed if needed.`, 'warning');
     }
 
     setCart(prev => {
@@ -229,10 +243,34 @@ export default function SellScreen() {
         productId: product.id,
         productName: product.name,
         qty: 1,
+        isPack: false,
         priceAtSale: product.price,
         costPriceAtSale: product.costPrice
       }];
     });
+  };
+
+  const toggleItemPack = (productId: string) => {
+    setCart(prev => prev.map(item => {
+      if (item.productId === productId) {
+        const product = products.find(p => p.id === productId);
+        if (!product) return item;
+        
+        const nextIsPack = !item.isPack;
+        // Optimization: Default to regular price * pieces if packPrice is not set
+        const defaultPackPrice = product.price * (product.piecesPerPack || 1);
+        
+        return {
+          ...item,
+          isPack: nextIsPack,
+          priceAtSale: nextIsPack 
+            ? (product.packPrice || defaultPackPrice)
+            : product.price,
+          costPriceAtSale: product.costPrice
+        };
+      }
+      return item;
+    }));
   };
 
   const handleBarcodeScanned = ({ data }: { data: string }) => {
@@ -253,7 +291,7 @@ export default function SellScreen() {
     if (!permission?.granted) {
       const { granted } = await requestPermission();
       if (!granted) {
-        Alert.alert('Permission Denied', 'Camera permission is required to scan products.');
+        showAlert('Permission Denied', 'Camera permission is required to scan products.', 'error');
         return;
       }
     }
@@ -301,10 +339,11 @@ export default function SellScreen() {
     
     // Map cart items to include current cost prices for permanent profit tracking
     const itemsWithCost = cart.map(item => {
-      const fullProd = products.find(p => p.id === item.productId);
+      const p = products.find(prod => prod.id === item.productId);
+      const baseCost = p?.costPrice || 0;
       return {
         ...item,
-        costPriceAtSale: fullProd?.costPrice || 0
+        costPriceAtSale: item.isPack ? baseCost * (p?.piecesPerPack || 1) : baseCost
       };
     });
 
@@ -320,25 +359,26 @@ export default function SellScreen() {
       await saveTransaction(transaction);
       setCart([]);
       setCheckoutModalVisible(false);
-      Alert.alert('Success', 'Transaction completed!');
+      showAlert('Success', 'Transaction completed!', 'success');
       loadProducts(); // Refresh stocks
     } catch (e: any) {
-      Alert.alert('Unable to Complete Sale', e.message || 'Failed to save transaction.');
+      showAlert('Unable to Complete Sale', e.message || 'Failed to save transaction.', 'error');
     }
   };
 
   const handleUtangCheckout = async () => {
     if (cart.length === 0) return;
     if (!customerName.trim()) {
-      Alert.alert('Required', 'Please enter a customer name for the Utang record.');
+      showAlert('Required', 'Please enter a customer name for the Utang record.', 'warning');
       return;
     }
 
     const itemsWithCost = cart.map(item => {
-      const fullProd = products.find(p => p.id === item.productId);
+      const p = products.find(prod => prod.id === item.productId);
+      const baseCost = p?.costPrice || 0;
       return {
         ...item,
-        costPriceAtSale: fullProd?.costPrice || 0
+        costPriceAtSale: item.isPack ? baseCost * (p?.piecesPerPack || 1) : baseCost
       };
     });
 
@@ -357,10 +397,10 @@ export default function SellScreen() {
       setUtangModalVisible(false);
       setCheckoutModalVisible(false);
       setCustomerName('');
-      Alert.alert('Success', `Charged ₱${total.toFixed(0)} to ${customerName.trim()}'s Utang.`);
+      showAlert('Success', `Charged ₱${total.toFixed(0)} to ${customerName.trim()}'s Utang.`, 'success');
       loadProducts(); // Refresh stocks for sold items
     } catch (e: any) {
-      Alert.alert('Unable to Create Utang', e.message || 'Failed to save Utang record.');
+      showAlert('Unable to Create Utang', e.message || 'Failed to save Utang record.', 'error');
     }
   };
 
@@ -472,7 +512,24 @@ export default function SellScreen() {
         keyExtractor={(item) => item.id}
         renderItem={renderProduct}
         numColumns={2}
-        contentContainerStyle={styles.productList}
+        contentContainerStyle={[styles.productList, filteredProducts.length === 0 && { flex: 1 }]}
+        ListEmptyComponent={
+          <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', marginTop: 100, paddingHorizontal: 40 }}>
+            {products.length === 0 ? (
+              <>
+                <Store size={60} color={Theme.colors.surfaceVariant} style={{ marginBottom: 16 }} />
+                <Text style={{ fontFamily: Theme.typography.headline, fontSize: 18, color: Theme.colors.outline, textAlign: 'center', marginBottom: 8 }}>Your shop is empty!</Text>
+                <Text style={{ fontFamily: Theme.typography.body, fontSize: 14, color: Theme.colors.outlineVariant, textAlign: 'center' }}>Head over to the Inventory tab to start adding your items.</Text>
+              </>
+            ) : (
+              <>
+                <Search size={60} color={Theme.colors.surfaceVariant} style={{ marginBottom: 16 }} />
+                <Text style={{ fontFamily: Theme.typography.headline, fontSize: 18, color: Theme.colors.outline, textAlign: 'center', marginBottom: 8 }}>No items found</Text>
+                <Text style={{ fontFamily: Theme.typography.body, fontSize: 14, color: Theme.colors.outlineVariant, textAlign: 'center' }}>We couldn't find any products matching your search.</Text>
+              </>
+            )}
+          </View>
+        }
       />
 
       {cart.length > 0 && (
@@ -492,9 +549,27 @@ export default function SellScreen() {
           </View>
           
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.cartScroll}>
-            {cart.map(item => (
+            {cart.map(item => {
+              const product = products.find(p => p.id === item.productId);
+              const canSellPack = businessSettings.enableBulkMode !== false && product && product.piecesPerPack && product.piecesPerPack > 1 && product.packPrice && product.packPrice > 0;
+              
+              return (
               <View key={item.productId} style={styles.cartChip}>
-                <Text style={styles.cartChipName} numberOfLines={1}>{item.productName} P{item.priceAtSale}</Text>
+                {canSellPack && (
+                  <TouchableOpacity 
+                    onPress={() => toggleItemPack(item.productId)} 
+                    style={{ marginRight: 8, backgroundColor: 'rgba(255,255,255,0.25)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8 }}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                      {item.isPack ? <Package size={12} color="#FFF" /> : <Tag size={12} color="#FFF" />}
+                      <Text style={{ fontSize: 11, color: '#FFF', fontFamily: Theme.typography.bodyBold }}>
+                        {item.isPack ? 'Pack' : 'Unit'}
+                      </Text>
+                      <ArrowRightLeft size={10} color="#FFF" style={{ marginLeft: 2, opacity: 0.8 }} />
+                    </View>
+                  </TouchableOpacity>
+                )}
+                <Text style={styles.cartChipName} numberOfLines={1}>{item.productName} ₱{item.priceAtSale}</Text>
                 <View style={styles.qtyControls}>
                   <TouchableOpacity onPress={() => updateQty(item.productId, -1)}>
                     <Minus size={14} color="#FFF" />
@@ -514,7 +589,8 @@ export default function SellScreen() {
                   <X size={12} color={Theme.colors.tertiary} strokeWidth={3} />
                 </TouchableOpacity>
               </View>
-            ))}
+              );
+            })}
           </ScrollView>
 
           <View style={styles.checkoutSection}>
@@ -734,8 +810,27 @@ export default function SellScreen() {
               data={[...cart].reverse()}
               keyExtractor={(item) => item.productId}
               renderItem={({ item }) => (
-                <View style={styles.miniCartItem}>
-                  <Text style={styles.miniItemName} numberOfLines={1}>{item.productName}</Text>
+                <View key={item.productId} style={styles.cartItem}>
+                  <View style={styles.cartItemMain}>
+                    <Text style={styles.cartItemName} numberOfLines={1}>{item.productName}</Text>
+                    <View style={styles.cartItemPriceRow}>
+                      <Text style={styles.cartItemPrice}>₱{(item.priceAtSale * item.qty).toFixed(0)}</Text>
+                      {item.qty > 1 && (
+                         <Text style={styles.cartItemUnit}>₱{item.priceAtSale.toFixed(0)} / {item.isPack ? 'pack' : 'pc'}</Text>
+                      )}
+                    </View>
+                  </View>
+
+                  {/* Pack/Piece Toggle */}
+                  <TouchableOpacity 
+                    style={[styles.unitToggle, item.isPack && styles.unitTogglePack]}
+                    onPress={() => toggleItemPack(item.productId)}
+                  >
+                    <Text style={[styles.unitToggleText, item.isPack && styles.unitToggleTextActive]}>
+                      {item.isPack ? 'PACK' : 'PC'}
+                    </Text>
+                  </TouchableOpacity>
+
                   <View style={styles.miniControls}>
                     <TouchableOpacity onPress={() => updateQty(item.productId, -1)}>
                       <Minus size={20} color={Theme.colors.primary} />
@@ -765,6 +860,34 @@ export default function SellScreen() {
             )}
           </View>
         </SafeAreaView>
+      </Modal>
+
+      {/* Custom Alert Modal */}
+      <Modal visible={alertVisible} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.alertCard}>
+            {alertConfig.type === 'success' && <CheckCircle2 size={48} color={Theme.colors.primary} style={styles.alertIcon} />}
+            {alertConfig.type === 'error' && <X size={48} color={Theme.colors.tertiary} style={styles.alertIcon} />}
+            {alertConfig.type === 'warning' && <AlertTriangle size={48} color="#f59e0b" style={styles.alertIcon} />}
+            {alertConfig.type === 'info' && <Info size={48} color={Theme.colors.primary} style={styles.alertIcon} />}
+            
+            <Text style={styles.alertTitle}>{alertConfig.title}</Text>
+            <Text style={styles.alertMessage}>{alertConfig.message}</Text>
+            
+            <TouchableOpacity 
+              style={[
+                styles.alertBtn, 
+                { backgroundColor: alertConfig.type === 'error' || alertConfig.type === 'warning' ? Theme.colors.tertiary : Theme.colors.primary }
+              ]} 
+              onPress={() => {
+                setAlertVisible(false);
+                if (alertConfig.onConfirm) alertConfig.onConfirm();
+              }}
+            >
+              <Text style={styles.alertBtnText}>Got it</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -1029,6 +1152,9 @@ const styles = StyleSheet.create({
     fontFamily: Theme.typography.headlineBlack,
     color: '#FFF',
     fontSize: 18,
+    includeFontPadding: false,
+    textAlignVertical: 'center',
+    marginTop: -2,
   },
   modalOverlay: {
     flex: 1,
@@ -1074,6 +1200,59 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 12,
     width: '100%',
+  },
+  cartItem: {
+    backgroundColor: Theme.colors.primary,
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginRight: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    position: 'relative',
+    marginTop: 6,
+  },
+  cartItemMain: {
+    flex: 1,
+    marginRight: 8,
+  },
+  cartItemName: {
+    color: '#FFF',
+    fontFamily: Theme.typography.bodyBold,
+    fontSize: 13,
+  },
+  cartItemPriceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  cartItemPrice: {
+    color: '#FFF',
+    fontFamily: Theme.typography.headlineBlack,
+    fontSize: 11,
+  },
+  cartItemUnit: {
+    color: 'rgba(255,255,255,0.7)',
+    fontFamily: Theme.typography.bodyMedium,
+    fontSize: 9,
+  },
+  unitToggle: {
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    marginRight: 8,
+  },
+  unitTogglePack: {
+    backgroundColor: '#FFF',
+  },
+  unitToggleText: {
+    fontFamily: Theme.typography.bodyBold,
+    fontSize: 10,
+    color: '#FFF',
+  },
+  unitToggleTextActive: {
+    color: Theme.colors.primary,
   },
   qtyBtn: {
     flex: 1,
@@ -1334,8 +1513,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 20,
-    backgroundColor: '#FFF',
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+    paddingTop: Platform.OS === 'android' ? 50 : 50,
+    backgroundColor: Theme.colors.surface,
   },
   scannerHUDTitle: {
     fontFamily: Theme.typography.headlineBlack,
@@ -1444,7 +1625,52 @@ const styles = StyleSheet.create({
   emptyHUDText: {
     fontFamily: Theme.typography.bodyMedium,
     color: Theme.colors.outline,
-    marginTop: 12,
+    fontSize: 16,
+  },
+  // Custom Alert Styles
+  alertCard: {
+    width: width * 0.85,
+    backgroundColor: Theme.colors.surface,
+    borderRadius: 32,
+    padding: 32,
+    alignItems: 'center',
+    // Premium shadow
+    elevation: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.35,
+    shadowRadius: 24,
+  },
+  alertIcon: {
+    marginBottom: 20,
+  },
+  alertTitle: {
+    fontFamily: Theme.typography.headlineBlack,
+    fontSize: 22,
+    color: Theme.colors.onSurface,
+    marginBottom: 8,
+    textAlign: 'center',
+    letterSpacing: -0.5,
+  },
+  alertMessage: {
+    fontFamily: Theme.typography.bodyMedium,
+    fontSize: 15,
+    color: Theme.colors.onSurfaceVariant,
+    textAlign: 'center',
+    marginBottom: 24,
+    lineHeight: 22,
+  },
+  alertBtn: {
+    width: '100%',
+    paddingVertical: 16,
+    borderRadius: 16,
+    alignItems: 'center',
+  },
+  alertBtnText: {
+    fontFamily: Theme.typography.headlineBlack,
+    color: '#FFF',
+    fontSize: 16,
+    letterSpacing: 0.5,
   },
   hudCheckoutBtn: {
     backgroundColor: Theme.colors.primary,
@@ -1465,9 +1691,9 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 20,
     fontFamily: Theme.typography.bodyBold,
-    color: '#FFF',
+    color: Theme.colors.onSurface,
     fontSize: 12,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'transparent',
     paddingHorizontal: 16,
     paddingVertical: 6,
     borderRadius: 20,

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   View, 
   Text, 
@@ -6,22 +6,23 @@ import {
   ScrollView, 
   TouchableOpacity, 
   TextInput, 
-  Alert, 
   Image,
   Modal,
-  SafeAreaView,
   Platform,
-  Vibration
+  Vibration,
+  Dimensions,
+  Alert,
+  ActionSheetIOS
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Audio } from 'expo-av';
 import { 
   ChevronLeft, 
   Plus, 
   Package, 
-  Tag, 
   CircleDollarSign, 
   History, 
   TrendingUp, 
@@ -31,30 +32,37 @@ import {
   Image as ImageIcon,
   Trash2,
   AlertTriangle,
-  QrCode
+  QrCode,
+  CheckCircle2,
+  Info,
+  Tag
 } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { getProducts, updateProduct, deleteProduct, getRestockLogs, addRestockLog, CATEGORIES, getBusinessSettings } from '../../lib/storage';
+import { getProducts, updateProduct, deleteProduct, getRestockLogs, addRestockLog, CATEGORIES } from '../../lib/storage';
+import { useSettings } from '../../context/SettingsContext';
 import { Product, RestockLog, BusinessSettings } from '../../lib/types';
 import { Theme } from '../../constants/Theme';
+
+const { width, height } = Dimensions.get('window');
+
 
 export default function ProductDetailScreen() {
   const { id } = useLocalSearchParams();
   const router = useRouter();
+
+  // Core Data
   const [product, setProduct] = useState<Product | null>(null);
   const [restockLogs, setRestockLogs] = useState<RestockLog[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [loading, setLoading] = useState(true);
 
-  // Modals
+  // Modals Visibility
   const [restockVisible, setRestockVisible] = useState(false);
   const [editVisible, setEditVisible] = useState(false);
   const [deleteVisible, setDeleteVisible] = useState(false);
-
-  // Form states
-  const [qtyToAdd, setQtyToAdd] = useState('');
-  const [restockCost, setRestockCost] = useState('');
-
-  // Edit states
+  const [detailVisible, setDetailVisible] = useState(false);
+  const [scannerVisible, setScannerVisible] = useState(false);
+  
+  // Product Edit States
   const [name, setName] = useState('');
   const [price, setPrice] = useState('');
   const [costPrice, setCostPrice] = useState('');
@@ -62,88 +70,158 @@ export default function ProductDetailScreen() {
   const [unit, setUnit] = useState('pc');
   const [lowStockThreshold, setLowStockThreshold] = useState('5');
   const [photoUri, setPhotoUri] = useState<string | undefined>(undefined);
-  const [showErrors, setShowErrors] = useState(false);
-  const [restockPrice, setRestockPrice] = useState('');
   const [barcode, setBarcode] = useState('');
-  const [isScanning, setIsScanning] = useState(false);
+  const [piecesPerPack, setPiecesPerPack] = useState('1');
+  const [packPrice, setPackPrice] = useState('0');
+  const [costPerPack, setCostPerPack] = useState('0');
+  const [isBulkMode, setIsBulkMode] = useState(false);
+
+  // Restock States
+  const [isPackRestock, setIsPackRestock] = useState(false);
+  const [qtyToAdd, setQtyToAdd] = useState('');
+  const [restockCost, setRestockCost] = useState('');
+  const [restockCostPerPack, setRestockCostPerPack] = useState('');
+  const [restockPrice, setRestockPrice] = useState('');
+  const [restockPackPrice, setRestockPackPrice] = useState('');
+  const [restockPiecesPerPack, setRestockPiecesPerPack] = useState('1');
+  const [selectedLog, setSelectedLog] = useState<RestockLog | null>(null);
+
+  // Global UI States
+  const [showFullData, setShowFullData] = useState(false);
+  const [showErrors, setShowErrors] = useState(false);
+  // Scanner Logic
   const [permission, requestPermission] = useCameraPermissions();
+  const [hasManuallySetPrice, setHasManuallySetPrice] = useState(false);
+  const [hasManuallySetPackPrice, setHasManuallySetPackPrice] = useState(false);
+
+  const { businessSettings, updateSettings } = useSettings();
   const beepSound = useRef<Audio.Sound | null>(null);
-  const [businessSettings, setBusinessSettings] = useState<BusinessSettings>({});
+  
+  // Custom Alert State
+  const [alertVisible, setAlertVisible] = useState(false);
+  const [alertConfig, setAlertConfig] = useState<{
+    title: string;
+    message: string;
+    type: 'success' | 'error' | 'warning' | 'info';
+    onConfirm?: () => void;
+  }>({ title: '', message: '', type: 'info' });
+
+  const showAlert = (title: string, message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info', onConfirm?: () => void) => {
+    setAlertConfig({ title, message, type, onConfirm });
+    setAlertVisible(true);
+  };
+
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+      loadRestockLogs();
+      loadBeep();
+    }, [id])
+  );
 
   useEffect(() => {
-    loadData();
-    loadBeep();
-    loadSettings();
-
     return () => {
       if (beepSound.current) {
         beepSound.current.unloadAsync();
       }
     };
-  }, [id]);
+  }, []);
+
+  const loadRestockLogs = async () => {
+    try {
+      const logs = await getRestockLogs();
+      setRestockLogs(logs.filter((l: RestockLog) => l.productId === id).reverse());
+    } catch (e) {
+      console.error('Error loading restock logs:', e);
+    }
+  };
 
   const loadData = async () => {
-    const products = await getProducts();
-    const found = products.find((p: Product) => p.id === id);
-    if (!found) {
-      router.back();
-      return;
+    try {
+      const products = await getProducts();
+      const p = products.find((prod: Product) => prod.id === id);
+      if (p) {
+        setProduct(p);
+        setName(p.name || '');
+        setPrice(p.price?.toString() || '0');
+        setCostPrice(p.costPrice?.toString() || '0');
+        setCategory(p.category || 'Others');
+        setUnit(p.unit || 'pc');
+        setLowStockThreshold(p.lowStockThreshold?.toString() || '5');
+        setPhotoUri(p.photoUri);
+        setBarcode(p.barcode || '');
+        setPiecesPerPack(p.piecesPerPack?.toString() || '1');
+        setPackPrice(p.packPrice?.toString() || (p.price * (p.piecesPerPack || 1)).toString());
+        
+        const multiplier = p.piecesPerPack || 1;
+        const baseCost = p.costPrice || 0;
+        setCostPerPack((baseCost * multiplier).toFixed(2));
+        setIsBulkMode(multiplier > 1 || p.packPrice !== undefined);
+        
+        // Init restock values
+        setRestockPrice(p.price?.toString() || '0');
+        setRestockPackPrice(p.packPrice?.toString() || (p.price * multiplier).toString());
+        setRestockPiecesPerPack(multiplier.toString());
+      }
+      await loadRestockLogs();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
     }
-    setProduct(found);
-    
-    // Set edit form values
-    setName(found.name);
-    setPrice(found.price.toString());
-    setCostPrice(found.costPrice?.toString() || '');
-    setCategory(found.category || 'Others');
-    setUnit(found.unit || 'pc');
-    setLowStockThreshold(found.lowStockThreshold.toString());
-    setBarcode(found.barcode || '');
-    
-    // Sanitize stale or broken URLs (Allow Base64 and HTTP)
-    if (found.photoUri && !found.photoUri.startsWith('data:image') && !found.photoUri.startsWith('http')) {
-      setPhotoUri(undefined);
-      found.photoUri = undefined;
-    } else {
-      setPhotoUri(found.photoUri);
-    }
-    
-    setRestockPrice(found.price.toString());
+  };
 
-    const logs = await getRestockLogs();
-    setRestockLogs(logs.filter((l: RestockLog) => l.productId === id));
-    setIsLoading(false);
+  const openRestock = () => {
+    setQtyToAdd('');
+    setRestockCost('');
+    setRestockCostPerPack('');
+    setRestockPrice(product?.price.toString() || '');
+    setRestockPackPrice(product?.packPrice?.toString() || '0');
+    setRestockPiecesPerPack(product?.piecesPerPack?.toString() || '1');
+    setHasManuallySetPrice(false);
+    setHasManuallySetPackPrice(false);
+    setIsPackRestock(false);
+    setRestockVisible(true);
   };
 
   const handleRestock = async () => {
     if (!qtyToAdd || !restockCost || !restockPrice) {
       setShowErrors(true);
-      Alert.alert('Missing Fields', 'Please fill in all boxes marked in red.');
+      showAlert('Missing Fields', 'Please fill in all boxes marked in red.', 'warning');
       return;
     }
     
-    const qty = parseInt(qtyToAdd);
-    const cost = parseFloat(restockCost);
-    const newPrice = parseFloat(restockPrice);
-    const unitCost = qty > 0 ? cost / qty : 0;
+    const inputQty = parseInt(qtyToAdd) || 0;
+    const cost = parseFloat(restockCost) || 0;
+    const newPrice = parseFloat(restockPrice) || 0;
+    const newPackPrice = parseFloat(restockPackPrice) || 0;
+    const newPiecesPerPack = parseInt(restockPiecesPerPack) || 1;
+    
+    const addedQty = isPackRestock ? inputQty * newPiecesPerPack : inputQty;
+    const unitCost = addedQty > 0 ? cost / addedQty : 0;
     
     try {
       const log: RestockLog = {
         id: Date.now().toString(),
         productId: id as string,
         productName: product!.name,
-        qtyAdded: qty,
+        qtyAdded: addedQty,
         costPerUnit: unitCost,
         totalCost: cost,
         timestamp: new Date().toISOString(),
+        priceAtRestock: newPrice,
+        packPriceAtRestock: newPackPrice,
+        piecesPerPackAtRestock: newPiecesPerPack,
+        isBulk: isPackRestock,
       };
 
-      // Update Product Stock AND Financials
       const updated: Product = {
         ...product!,
-        stock: product!.stock + qty,
+        stock: product!.stock + addedQty,
         costPrice: unitCost,
         price: newPrice,
+        packPrice: newPackPrice > 0 ? newPackPrice : (product!.packPrice || 0),
+        piecesPerPack: newPiecesPerPack,
       };
 
       await addRestockLog(log);
@@ -154,24 +232,27 @@ export default function ProductDetailScreen() {
       setRestockCost('');
       setShowErrors(false);
       loadData();
+      showAlert('Success', `${isPackRestock ? inputQty + ' Packs' : inputQty + ' Units'} added to inventory.`, 'success');
     } catch (e) {
-      Alert.alert('Error Restocking', 'Financial update failed. Please check your inputs or storage space.');
-      console.error(e);
+      showAlert('Error', 'Financial update failed. Please check your inputs or storage space.', 'error');
     }
   };
 
   const handleSaveEdit = async () => {
     if (!name || !price || !costPrice || !unit || !lowStockThreshold) {
       setShowErrors(true);
-      Alert.alert('Missing Fields', 'Please fill in all boxes marked in red (Cost Price is now required for edits).');
+      showAlert('Missing Fields', 'Please fill in all boxes marked in red.', 'warning');
       return;
     }
 
     try {
-      const updated: Product = {
+      const multiplier = isBulkMode ? (parseInt(piecesPerPack) || 1) : 1;
+      const updatedProduct: Product = {
         ...product!,
-        name,
+        name: name.trim(),
         price: parseFloat(price),
+        packPrice: isBulkMode ? (parseFloat(packPrice) || undefined) : undefined,
+        piecesPerPack: multiplier,
         costPrice: parseFloat(costPrice),
         category,
         unit,
@@ -180,19 +261,159 @@ export default function ProductDetailScreen() {
         photoUri,
       };
 
-      await updateProduct(updated);
+      await updateProduct(updatedProduct);
+      setProduct(updatedProduct);
       setEditVisible(false);
       setShowErrors(false);
-      loadData();
+      showAlert('Success', 'Product updated successfully!', 'success');
     } catch (e) {
-      Alert.alert('Error Updating', 'Failed to save changes. The image might be too large or storage is full.');
-      console.error(e);
+      showAlert('Error', 'Failed to update product. The photo might be too large.', 'error');
     }
   };
 
-  const loadSettings = async () => {
-    const data = await getBusinessSettings();
-    setBusinessSettings(data);
+  const getMarginInfo = (sPrice: string, cPrice: string) => {
+    const s = parseFloat(sPrice) || 0;
+    const c = parseFloat(cPrice) || 0;
+    if (s <= 0 || c <= 0) return null;
+    const profit = s - c;
+    const margin = (profit / s) * 100;
+    return { profit, margin: margin.toFixed(1), isLoss: profit < 0 };
+  };
+
+
+  const updateCostFromPiece = (unitCost: string) => {
+    setCostPrice(unitCost);
+    const multiplier = parseInt(piecesPerPack) || 1;
+    const unitCostVal = parseFloat(unitCost) || 0;
+    if (multiplier > 0 && unitCostVal > 0) {
+      setCostPerPack((unitCostVal * multiplier).toFixed(2));
+      // Auto-adjust sell prices with ₱5 markup
+      setPrice((unitCostVal + 5).toFixed(2));
+      setPackPrice(((unitCostVal + 5) * multiplier).toFixed(2));
+    }
+  };
+
+  const updatePackSize = (size: string) => {
+    setPiecesPerPack(size);
+    const multiplier = parseInt(size) || 1;
+    const packCostVal = parseFloat(costPerPack) || 0;
+    if (multiplier > 0 && packCostVal > 0) {
+      setCostPrice((packCostVal / multiplier).toFixed(2));
+      // Auto-adjust sell prices with ₱5 markup
+      const unitCost = packCostVal / multiplier;
+      setPrice((unitCost + 5).toFixed(2));
+      setPackPrice((packCostVal + 5).toFixed(2));
+    }
+    // Also sync pack price from unit price if no cost
+    const unitSell = parseFloat(price) || 0;
+    if (unitSell > 0 && multiplier > 0) {
+      setPackPrice((unitSell * multiplier).toFixed(2));
+    }
+  };
+
+  const updatePiecePriceFromPack = (pPrice: string) => {
+    setPackPrice(pPrice);
+    const multiplier = parseInt(piecesPerPack) || 1;
+    const packPriceVal = parseFloat(pPrice) || 0;
+    if (multiplier > 0 && packPriceVal > 0) {
+      setPrice((packPriceVal / multiplier).toFixed(2));
+    }
+  };
+
+  const updateCostFromPack = (pCost: string) => {
+    setCostPerPack(pCost);
+    const multiplier = parseInt(piecesPerPack) || 1;
+    const costVal = parseFloat(pCost) || 0;
+    if (multiplier > 0 && costVal > 0) {
+      const unitCost = costVal / multiplier;
+      setCostPrice(unitCost.toFixed(2));
+      // Auto-adjust sell prices with ₱5 markup
+      setPrice((unitCost + 5).toFixed(2));
+      setPackPrice((costVal + 5).toFixed(2));
+    }
+  };
+
+  const getDashboardData = () => {
+    const uMargin = getMarginInfo(price, costPrice);
+    const pMargin = getMarginInfo(packPrice, costPerPack);
+    return { uMargin, pMargin };
+  };
+
+  const updateRestockTotalFromPackCost = (pCost: string) => {
+    setRestockCostPerPack(pCost);
+    const packs = parseInt(qtyToAdd) || 0;
+    const packCostVal = parseFloat(pCost) || 0;
+    if (isPackRestock && packs > 0 && packCostVal > 0) {
+      setRestockCost((packCostVal * packs).toFixed(2));
+    }
+    // Auto-calc unit price from pack cost + ₱5 markup
+    const ppp = parseInt(restockPiecesPerPack) || 1;
+    if (packCostVal > 0 && ppp > 0) {
+      const unitCost = packCostVal / ppp;
+      setRestockPrice((unitCost + 5).toFixed(2));
+      setRestockPackPrice((packCostVal + 5).toFixed(2));
+    }
+  };
+
+  const updateRestockPackCostFromTotal = (totalCostVal: string) => {
+    setRestockCost(totalCostVal);
+    const packs = parseInt(qtyToAdd) || 0;
+    const totalVal = parseFloat(totalCostVal) || 0;
+    if (isPackRestock && packs > 0 && totalVal > 0) {
+      const packCost = totalVal / packs;
+      setRestockCostPerPack(packCost.toFixed(2));
+      // Auto-calc unit price + ₱5 markup
+      const ppp = parseInt(restockPiecesPerPack) || 1;
+      setRestockPrice(((packCost / ppp) + 5).toFixed(2));
+      setRestockPackPrice((packCost + 5).toFixed(2));
+    }
+  };
+
+  const updateRestockPiecesPerPack = (val: string) => {
+    setRestockPiecesPerPack(val);
+    const ppp = parseInt(val) || 1;
+    // Recalc unit sell from pack sell
+    const packSell = parseFloat(restockPackPrice) || 0;
+    if (packSell > 0 && ppp > 0) {
+      setRestockPrice((packSell / ppp).toFixed(2));
+    }
+    // Recalc cost per unit from cost per pack
+    const packCost = parseFloat(restockCostPerPack) || 0;
+    if (packCost > 0 && ppp > 0) {
+      const packs = parseInt(qtyToAdd) || 0;
+      if (packs > 0) {
+        setRestockCost((packCost * packs).toFixed(2));
+      }
+    }
+  };
+
+  const updateRestockUnitSell = (val: string) => {
+    setRestockPrice(val);
+    const ppp = parseInt(restockPiecesPerPack) || 1;
+    const unitSell = parseFloat(val) || 0;
+    if (unitSell > 0 && ppp > 0) {
+      setRestockPackPrice((unitSell * ppp).toFixed(2));
+    }
+  };
+
+  const updateRestockPackSell = (val: string) => {
+    setRestockPackPrice(val);
+    const ppp = parseInt(restockPiecesPerPack) || 1;
+    const packSell = parseFloat(val) || 0;
+    if (packSell > 0 && ppp > 0) {
+      setRestockPrice((packSell / ppp).toFixed(2));
+    }
+  };
+
+  const startBarcodeScan = async () => {
+    if (!permission?.granted) {
+      const { granted } = await requestPermission();
+      if (!granted) {
+        showAlert('Permission Denied', 'Camera permission is required to scan barcodes.', 'warning');
+        return;
+      }
+    }
+    setScannerVisible(true);
   };
 
   const loadBeep = async () => {
@@ -219,38 +440,16 @@ export default function ProductDetailScreen() {
 
   const handleBarcodeScanned = ({ data }: { data: string }) => {
     setBarcode(data);
-    setIsScanning(false);
+    setScannerVisible(false);
     playBeep();
   };
 
-  const startBarcodeScan = async () => {
-    if (!permission?.granted) {
-      const { granted } = await requestPermission();
-      if (!granted) {
-        Alert.alert('Permission Denied', 'Camera permission is required to scan barcodes.');
-        return;
-      }
-    }
-    setIsScanning(true);
-  };
+
 
   const handleDelete = async () => {
-    Alert.alert(
-      'Delete Product',
-      'Are you sure you want to delete this product? This action cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Delete', 
-          style: 'destructive', 
-          onPress: async () => {
-            await deleteProduct(id as string);
-            setDeleteVisible(false);
-            router.back();
-          } 
-        },
-      ]
-    );
+    await deleteProduct(id as string);
+    setDeleteVisible(false);
+    router.back();
   };
 
   const handlePickImage = async (useCamera: boolean = false) => {
@@ -260,7 +459,7 @@ export default function ProductDetailScreen() {
         : await ImagePicker.requestMediaLibraryPermissionsAsync();
 
       if (permission.status !== 'granted') {
-        Alert.alert('Permission Denied', 'We need access to your camera/photos to update the product image.');
+        showAlert('Permission Denied', 'We need access to your camera/photos to update the product image.', 'warning');
         return;
       }
 
@@ -302,15 +501,14 @@ export default function ProductDetailScreen() {
       }
     } catch (error) {
       console.error('Image picker error:', error);
-      Alert.alert('Error', 'Failed to pick image');
+      showAlert('Error', 'Failed to pick image', 'error');
     }
   };
 
-  if (isLoading || !product) return null;
+  if (loading || !product) return null;
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.iconButton}>
           <ChevronLeft size={28} color={Theme.colors.onSurface} />
@@ -322,7 +520,6 @@ export default function ProductDetailScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        {/* Visual Summary */}
         <View style={styles.heroSection}>
           <View style={styles.imageBox}>
             {product.photoUri ? (
@@ -343,7 +540,6 @@ export default function ProductDetailScreen() {
           </View>
         </View>
 
-        {/* Stats Bento */}
         <View style={styles.statsGrid}>
           <View style={styles.statCard}>
             <Text style={styles.statLabel}>Current Stock</Text>
@@ -361,13 +557,11 @@ export default function ProductDetailScreen() {
           </View>
         </View>
 
-        {/* Action Bar */}
-        <TouchableOpacity style={styles.restockQuickBtn} onPress={() => setRestockVisible(true)}>
+        <TouchableOpacity style={styles.restockQuickBtn} onPress={openRestock}>
           <Plus size={24} color="#FFF" style={{ marginRight: 8 }} />
           <Text style={styles.restockQuickText}>Log New Restock</Text>
         </TouchableOpacity>
 
-        {/* Restock History */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <History size={20} color={Theme.colors.primary} />
@@ -379,9 +573,20 @@ export default function ProductDetailScreen() {
             </View>
           ) : (
             restockLogs.map((log, index) => (
-              <View key={log.id} style={[styles.logRow, index === restockLogs.length - 1 && { borderBottomWidth: 0 }]}>
+              <TouchableOpacity 
+                key={log.id} 
+                style={[styles.logRow, index === restockLogs.length - 1 && { borderBottomWidth: 0 }]}
+                onPress={() => {
+                  setSelectedLog(log);
+                  setDetailVisible(true);
+                }}
+              >
                 <View style={styles.logInfo}>
-                  <Text style={styles.logQty}>+{log.qtyAdded} {product.unit || 'units'}</Text>
+                  <Text style={styles.logQty}>
+                    {log.isBulk && log.piecesPerPackAtRestock 
+                      ? `+${Math.floor(log.qtyAdded / log.piecesPerPackAtRestock)} Packs` 
+                      : `+${log.qtyAdded} ${product.unit || 'units'}`}
+                  </Text>
                   <Text style={styles.logDate}>{new Date(log.timestamp).toLocaleDateString()} • {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
                 </View>
                 {log.totalCost && (
@@ -390,7 +595,7 @@ export default function ProductDetailScreen() {
                     <Text style={styles.logCostValue}>₱{log.totalCost.toFixed(0)}</Text>
                   </View>
                 )}
-              </View>
+              </TouchableOpacity>
             ))
           )}
         </View>
@@ -407,207 +612,571 @@ export default function ProductDetailScreen() {
       {/* Restock Modal */}
       <Modal visible={restockVisible} transparent animationType="slide">
         <View style={styles.modalOverlay}>
+          <TouchableOpacity activeOpacity={1} style={StyleSheet.absoluteFill} onPress={() => setRestockVisible(false)} />
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Add Stock</Text>
-            <Text style={styles.inputLabel}>QUANTITY TO ADD</Text>
-            <TextInput
-              style={[styles.input, showErrors && !qtyToAdd && styles.errorInput]}
-              placeholder="0"
-              keyboardType="numeric"
-              value={qtyToAdd}
-              onChangeText={setQtyToAdd}
-            />
-            <Text style={styles.inputLabel}>TOTAL COST (₱)</Text>
-            <TextInput
-              style={[styles.input, showErrors && !restockCost && styles.errorInput]}
-              placeholder="0.00"
-              keyboardType="numeric"
-              value={restockCost}
-              onChangeText={setRestockCost}
-            />
-            <Text style={styles.inputLabel}>NEW SELLING PRICE (₱)</Text>
+            <Text style={styles.modalTitle}>Stock Integration</Text>
+            
+            <ScrollView showsVerticalScrollIndicator={false}>
+            <View style={styles.restockTypeSelector}>
+              <TouchableOpacity 
+                style={[styles.restockTypeBtn, !isPackRestock && styles.restockTypeBtnActive]}
+                onPress={() => setIsPackRestock(false)}
+              >
+                <Text style={[styles.restockTypeText, !isPackRestock && styles.restockTypeTextActive]}>Per Piece</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.restockTypeBtn, isPackRestock && styles.restockTypeBtnActive]}
+                onPress={() => setIsPackRestock(true)}
+              >
+                <Text style={[styles.restockTypeText, isPackRestock && styles.restockTypeTextActive]}>Bulk Packs</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.inputRow}>
+              <View style={{ flex: 1, marginRight: 12 }}>
+                <Text style={styles.inputLabel}>QTY TO ADD ({isPackRestock ? 'Packs' : 'Pieces'})</Text>
+                <TextInput
+                  style={[styles.input, showErrors && !qtyToAdd && styles.errorInput]}
+                  placeholder="0"
+                  keyboardType="numeric"
+                  value={qtyToAdd}
+                  onChangeText={(val) => {
+                    setQtyToAdd(val);
+                    const qty = parseInt(val) || 0;
+                    const cost = parseFloat(restockCost) || 0;
+                    if (qty > 0 && cost > 0) {
+                      const totalUnits = isPackRestock ? qty * (parseInt(restockPiecesPerPack) || 1) : qty;
+                      setRestockPrice(((cost / totalUnits) + 5).toFixed(2));
+                      if (isPackRestock) {
+                        const packCost = parseFloat(restockCostPerPack) || 0;
+                        setRestockCost((packCost * qty).toFixed(2));
+                      }
+                    }
+                  }}
+                />
+              </View>
+              {isPackRestock && (
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.inputLabel}>PIECES IN PACK</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="1"
+                    keyboardType="numeric"
+                    value={restockPiecesPerPack}
+                    onChangeText={updateRestockPiecesPerPack}
+                  />
+                </View>
+              )}
+            </View>
+
+            {isPackRestock ? (
+              <>
+                <Text style={styles.inputLabel}>COST PER PACK (₱)</Text>
+                <TextInput
+                  style={[styles.input, showErrors && !restockCostPerPack && styles.errorInput]}
+                  placeholder="0.00"
+                  keyboardType="numeric"
+                  value={restockCostPerPack}
+                  onChangeText={updateRestockTotalFromPackCost}
+                />
+                <Text style={styles.inputLabel}>TOTAL COST (₱) — auto-sum</Text>
+                <TextInput
+                  style={[styles.input, showErrors && !restockCost && styles.errorInput]}
+                  placeholder="0.00"
+                  keyboardType="numeric"
+                  value={restockCost}
+                  onChangeText={updateRestockPackCostFromTotal}
+                />
+              </>
+            ) : (
+              <>
+                <Text style={styles.inputLabel}>TOTAL COST (₱)</Text>
+                <TextInput
+                  style={[styles.input, showErrors && !restockCost && styles.errorInput]}
+                  placeholder="0.00"
+                  keyboardType="numeric"
+                  value={restockCost}
+                  onChangeText={(val) => {
+                    setRestockCost(val);
+                    const qty = parseInt(qtyToAdd) || 0;
+                    const totalVal = parseFloat(val) || 0;
+                    if (qty > 0 && totalVal > 0) {
+                      setRestockPrice(((totalVal / qty) + 5).toFixed(2));
+                    }
+                  }}
+                />
+              </>
+            )}
+
+            {/* Auto Cost-Per-Unit Insight */}
+            {(() => {
+              const qty = parseInt(qtyToAdd) || 0;
+              const cost = parseFloat(restockCost) || 0;
+              const totalUnits = isPackRestock ? qty * (parseInt(restockPiecesPerPack) || 1) : qty;
+              const costPerUnit = totalUnits > 0 ? cost / totalUnits : 0;
+              if (costPerUnit > 0) {
+                return (
+                  <View style={styles.insightBox}>
+                    <View style={styles.insightRow}>
+                      <CircleDollarSign size={14} color={Theme.colors.primary} />
+                      <Text style={styles.insightText}>
+                        Cost per unit: ₱{costPerUnit.toFixed(2)} ({totalUnits} total pieces)
+                      </Text>
+                    </View>
+                  </View>
+                );
+              }
+              return null;
+            })()}
+
+            <Text style={styles.inputLabel}>UNIT PRICE (₱)</Text>
             <TextInput
               style={[styles.input, showErrors && !restockPrice && styles.errorInput]}
               placeholder="0.00"
               keyboardType="numeric"
               value={restockPrice}
-              onChangeText={setRestockPrice}
+              onChangeText={updateRestockUnitSell}
             />
+
+            {isPackRestock && (
+              <>
+                <Text style={styles.inputLabel}>PACK PRICE (₱)</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="0.00"
+                  keyboardType="numeric"
+                  value={restockPackPrice}
+                  onChangeText={updateRestockPackSell}
+                />
+              </>
+            )}
+
+            {/* Profit Margin Visual */}
+            {(() => {
+              const sellPrice = parseFloat(restockPrice) || 0;
+              const qty = parseInt(qtyToAdd) || 0;
+              const cost = parseFloat(restockCost) || 0;
+              const totalUnits = isPackRestock ? qty * (parseInt(restockPiecesPerPack) || 1) : qty;
+              const costPerUnit = totalUnits > 0 ? cost / totalUnits : 0;
+              if (sellPrice > 0 && costPerUnit > 0) {
+                const profit = sellPrice - costPerUnit;
+                const margin = ((profit / sellPrice) * 100).toFixed(1);
+                const isLoss = profit < 0;
+                return (
+                  <View style={styles.insightBox}>
+                    <View style={styles.insightRow}>
+                      <TrendingUp size={14} color={isLoss ? Theme.colors.tertiary : Theme.colors.primary} />
+                      <Text style={[styles.insightText, isLoss && { color: Theme.colors.tertiary }]}>
+                        {isLoss ? 'Loss' : 'Profit'}: ₱{Math.abs(profit).toFixed(2)}/unit ({margin}% margin)
+                      </Text>
+                    </View>
+                    {isPackRestock && parseFloat(restockPackPrice) > 0 && (
+                      <View style={styles.insightRow}>
+                        <TrendingUp size={14} color={Theme.colors.primary} />
+                        <Text style={styles.insightText}>
+                          Pack profit: ₱{(parseFloat(restockPackPrice) - (parseFloat(restockCostPerPack) || 0)).toFixed(2)}/pack
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                );
+              }
+              return null;
+            })()}
+
             <View style={styles.modalActions}>
               <TouchableOpacity style={styles.cancelBtn} onPress={() => setRestockVisible(false)}>
                 <Text style={styles.cancelBtnText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[styles.saveBtn, { flex: 1 }]} onPress={handleRestock}>
-                <Text style={styles.saveBtnText}>Log Restock</Text>
+                <Text style={styles.saveBtnText}>Log Integration</Text>
               </TouchableOpacity>
             </View>
+            </ScrollView>
           </View>
         </View>
       </Modal>
 
+      {/* Edit Product Modal */}
       <Modal visible={editVisible} transparent animationType="slide">
-        <View style={styles.sheetOverlay}>
-          <ScrollView 
-            style={styles.sheetContent}
-            contentContainerStyle={{ paddingBottom: 60 }}
-            showsVerticalScrollIndicator={false}
-          >
-            <View style={styles.modalHeader}>
+        <View style={styles.modalOverlay}>
+          <TouchableOpacity activeOpacity={1} style={StyleSheet.absoluteFill} onPress={() => setEditVisible(false)} />
+          <View style={styles.modalCard}>
+             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Edit Product</Text>
               <TouchableOpacity onPress={() => setEditVisible(false)}>
-                <X size={24} color={Theme.colors.onSurface} title="Close" />
+                <X size={24} color={Theme.colors.onSurface} />
               </TouchableOpacity>
             </View>
 
-            <View style={styles.imagePickerRow}>
-              <TouchableOpacity 
-                style={styles.editImageBox} 
-                onPress={() => {
-                  if (Platform.OS === 'web') {
-                    handlePickImage(false);
-                  } else {
-                    Alert.alert('Upload Photo', 'Choose a source', [
-                      { text: 'Cancel', style: 'cancel' },
-                      { text: 'Camera', onPress: () => handlePickImage(true) },
-                      { text: 'Gallery', onPress: () => handlePickImage(false) },
-                    ]);
-                  }
-                }}
-              >
-                {photoUri ? (
-                  <Image source={{ uri: photoUri }} style={styles.editImage} />
-                ) : (
-                  <ImageIcon size={32} color={Theme.colors.outline} />
-                )}
+            {businessSettings.enableBulkMode !== false && (
+              <View style={styles.typeSelector}>
                 <TouchableOpacity 
-                  style={styles.cameraBadge}
-                  onPress={() => handlePickImage(true)}
+                  style={[styles.typeBtn, !isBulkMode && styles.typeBtnActive]}
+                  onPress={() => setIsBulkMode(false)}
                 >
-                  <Camera size={16} color="#FFF" />
+                  <Tag size={18} color={!isBulkMode ? '#FFF' : Theme.colors.outline} />
+                  <Text style={[styles.typeBtnText, !isBulkMode && styles.typeBtnTextActive]}>Single Item</Text>
                 </TouchableOpacity>
-              </TouchableOpacity>
-            </View>
-
-            <Text style={styles.inputLabel}>PRODUCT NAME</Text>
-            <TextInput style={styles.input} value={name} onChangeText={setName} />
-
-            <View style={styles.inputRow}>
-              <View style={{ flex: 1, marginRight: 12 }}>
-                <Text style={styles.inputLabel}>PRICE (₱)</Text>
-                <TextInput 
-                  style={[styles.input, showErrors && !price && styles.errorInput]} 
-                  value={price} 
-                  onChangeText={setPrice} 
-                  keyboardType="numeric" 
-                />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.inputLabel}>COST (₱)</Text>
-                <TextInput 
-                  style={[styles.input, showErrors && !costPrice && styles.errorInput]} 
-                  value={costPrice} 
-                  onChangeText={setCostPrice} 
-                  keyboardType="numeric" 
-                />
-              </View>
-            </View>
-
-            <Text style={styles.inputLabel}>CATEGORY</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
-              {CATEGORIES.map((c: string) => (
                 <TouchableOpacity 
-                  key={c} 
-                  style={[styles.catChip, category === c && styles.catChipActive]}
-                  onPress={() => setCategory(c)}
+                  style={[styles.typeBtn, isBulkMode && styles.typeBtnActive]}
+                  onPress={() => setIsBulkMode(true)}
                 >
-                  <Text style={[styles.catChipText, category === c && styles.catChipTextActive]}>{c}</Text>
+                  <Package size={18} color={isBulkMode ? '#FFF' : Theme.colors.outline} />
+                  <Text style={[styles.typeBtnText, isBulkMode && styles.typeBtnTextActive]}>Bulk Packs</Text>
                 </TouchableOpacity>
-              ))}
-            </ScrollView>
-
-            <View style={styles.inputRow}>
-              <View style={{ flex: 1, marginRight: 12 }}>
-                <Text style={styles.inputLabel}>UNIT</Text>
-                <TextInput 
-                  style={[styles.input, showErrors && !unit && styles.errorInput]} 
-                  value={unit} 
-                  onChangeText={setUnit} 
-                  placeholder="pc, pack, etc." 
-                />
               </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.inputLabel}>THRESHOLD</Text>
-                <TextInput 
-                  style={[styles.input, showErrors && !lowStockThreshold && styles.errorInput]} 
-                  value={lowStockThreshold} 
-                  onChangeText={setLowStockThreshold} 
-                  keyboardType="numeric" 
-                />
-              </View>
-            </View>
+            )}
 
-            <Text style={styles.inputLabel}>BARCODE (OPTIONAL)</Text>
-            <View style={styles.barcodeInputRow}>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <View style={styles.imagePickerSection}>
+                <TouchableOpacity 
+                  style={styles.imagePickerBox}
+                  onPress={() => {
+                    if (Platform.OS === 'web') {
+                      handlePickImage(false);
+                    } else if (Platform.OS === 'ios') {
+                      ActionSheetIOS.showActionSheetWithOptions(
+                          { options: ['Cancel', 'Take Photo', 'Gallery'], cancelButtonIndex: 0 },
+                          (index: number) => { if (index === 1) handlePickImage(true); if (index === 2) handlePickImage(false); }
+                        );
+                    } else {
+                      Alert.alert('Change Photo', 'Choose source', [
+                          { text: 'Cancel', style: 'cancel' },
+                          { text: 'Camera', onPress: () => handlePickImage(true) },
+                          { text: 'Gallery', onPress: () => handlePickImage(false) },
+                        ]);
+                    }
+                  }}
+                >
+                  {photoUri ? (
+                    <Image source={{ uri: photoUri }} style={styles.pickedImage} />
+                  ) : (
+                    <View style={styles.imagePlaceholder}>
+                      <Camera size={32} color={Theme.colors.outline} />
+                      <Text style={styles.imagePlaceholderText}>Add Photo</Text>
+                    </View>
+                  )}
+                  {/* Visual camera shortcut button */}
+                  <TouchableOpacity 
+                    style={styles.cameraBadgeFloating}
+                    onPress={() => handlePickImage(true)}
+                  >
+                    <Camera size={16} color="#FFF" />
+                  </TouchableOpacity>
+                </TouchableOpacity>
+              </View>
+
+              <Text style={styles.inputLabel}>PRODUCT NAME</Text>
+              <TextInput style={styles.input} value={name} onChangeText={setName} />
+              
+              <Text style={styles.inputLabel}>UNIT PRICE (Selling ₱)</Text>
               <TextInput 
-                style={[styles.input, { flex: 1, marginBottom: 0 }]} 
-                placeholder="Scan or enter barcode" 
+                style={styles.input} 
+                value={price} 
+                onChangeText={setPrice} 
+                keyboardType="numeric" 
+                placeholder="0.00"
                 placeholderTextColor={Theme.colors.outlineVariant}
-                value={barcode} 
-                onChangeText={setBarcode} 
               />
-              <TouchableOpacity style={styles.scanBtn} onPress={startBarcodeScan}>
-                <QrCode size={20} color="#FFF" />
-              </TouchableOpacity>
-            </View>
+              
+              {isBulkMode && (
+                <View style={[styles.inputRow, { marginTop: 12 }]}>
+                  <View style={{ flex: 1, marginRight: 12 }}>
+                    <Text style={styles.inputLabel}>PCS PER PACK</Text>
+                    <TextInput 
+                      style={styles.input} 
+                      placeholder="1" 
+                      placeholderTextColor={Theme.colors.outlineVariant}
+                      keyboardType="numeric" 
+                      value={piecesPerPack} 
+                      onChangeText={setPiecesPerPack} 
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.inputLabel}>PACK COST (Buying ₱)</Text>
+                    <TextInput 
+                      style={styles.input} 
+                      placeholder="0" 
+                      placeholderTextColor={Theme.colors.outlineVariant}
+                      keyboardType="numeric" 
+                      value={costPerPack} 
+                      onChangeText={updateCostFromPack} 
+                    />
+                  </View>
+                </View>
+              )}
 
-            <TouchableOpacity style={styles.mainSaveBtn} onPress={handleSaveEdit}>
-              <Text style={styles.mainSaveBtnText}>Save Changes</Text>
-            </TouchableOpacity>
-          </ScrollView>
-        </View>
+              <View style={styles.inputRow}>
+                <View style={{ flex: 1, marginRight: isBulkMode ? 12 : 0 }}>
+                  <Text style={styles.inputLabel}>UNIT COST (Buying ₱)</Text>
+                  <TextInput 
+                    style={[styles.input, showErrors && !costPrice && styles.errorInput]} 
+                    placeholder="0" 
+                    placeholderTextColor={Theme.colors.outlineVariant}
+                    keyboardType="numeric" 
+                    value={costPrice} 
+                    onChangeText={updateCostFromPiece} 
+                  />
+                </View>
+                {isBulkMode && (
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.inputLabel}>PACK PRICE (Selling ₱)</Text>
+                    <TextInput 
+                      style={styles.input} 
+                      placeholder="0" 
+                      placeholderTextColor={Theme.colors.outlineVariant}
+                      keyboardType="numeric" 
+                      value={packPrice} 
+                      onChangeText={updatePiecePriceFromPack} 
+                    />
+                  </View>
+                )}
+              </View>
 
-        {/* Inner Barcode Scanner Modal */}
-        <Modal visible={isScanning} transparent animationType="fade">
-          <View style={styles.scannerOverlay}>
-            <CameraView 
-              style={styles.scannerView}
-              onBarcodeScanned={handleBarcodeScanned}
-              barcodeScannerSettings={{
-                barcodeTypes: ["qr", "ean13", "ean8", "upc_a", "upc_e", "code128", "code39", "itf14"],
-              }}
-            />
-            <View style={styles.scannerHUDOverlay}>
-              <View style={styles.scannerHUDHeaderInModal}>
-                <Text style={styles.scannerHUDTitleInModal}>Update Barcode</Text>
-                <TouchableOpacity onPress={() => setIsScanning(false)}>
-                  <X size={24} color="#FFF" />
+              <View style={styles.insightBox}>
+                {getDashboardData().uMargin && (
+                  <View style={styles.insightRow}>
+                    <TrendingUp size={14} color={getDashboardData().uMargin?.isLoss ? Theme.colors.tertiary : Theme.colors.primary} />
+                    <Text style={[styles.insightText, getDashboardData().uMargin?.isLoss && { color: Theme.colors.tertiary }]}>
+                      Piece Margin: {getDashboardData().uMargin?.margin}% (₱{getDashboardData().uMargin?.profit.toFixed(2)} profit/unit)
+                    </Text>
+                  </View>
+                )}
+                {parseInt(piecesPerPack) > 1 && getDashboardData().pMargin && (
+                   <View style={styles.insightRow}>
+                     <TrendingUp size={14} color={getDashboardData().pMargin?.isLoss ? Theme.colors.tertiary : Theme.colors.primary} />
+                     <Text style={[styles.insightText, getDashboardData().pMargin?.isLoss && { color: Theme.colors.tertiary }]}>
+                       Pack Margin: {getDashboardData().pMargin?.margin}% (₱{getDashboardData().pMargin?.profit.toFixed(2)} profit/pack)
+                     </Text>
+                   </View>
+                )}
+              </View>
+
+              <Text style={styles.inputLabel}>CATEGORY</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
+                {CATEGORIES.map(c => (
+                  <TouchableOpacity 
+                    key={c} 
+                    style={[styles.catChip, category === c && styles.catChipActive]}
+                    onPress={() => setCategory(c)}
+                  >
+                    <Text style={[styles.catChipText, category === c && styles.catChipTextActive]}>{c}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+
+              <View style={styles.inputRow}>
+                <View style={{ flex: 1, marginRight: 12 }}>
+                  <Text style={styles.inputLabel}>UNIT</Text>
+                  <TextInput 
+                    style={styles.input} 
+                    value={unit} 
+                    onChangeText={setUnit} 
+                    placeholder="pc"
+                    placeholderTextColor={Theme.colors.outlineVariant}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.inputLabel}>LOW STOCK ALERT</Text>
+                  <TextInput 
+                    style={styles.input} 
+                    value={lowStockThreshold} 
+                    onChangeText={setLowStockThreshold} 
+                    keyboardType="numeric" 
+                    placeholder="5"
+                    placeholderTextColor={Theme.colors.outlineVariant}
+                  />
+                </View>
+              </View>
+
+              <Text style={styles.inputLabel}>BARCODE (OPTIONAL)</Text>
+              <View style={styles.barcodeInputRow}>
+                <TextInput 
+                  style={[styles.input, { flex: 1, marginBottom: 0 }]} 
+                  value={barcode} 
+                  onChangeText={setBarcode} 
+                  placeholder="Scan or enter barcode"
+                  placeholderTextColor={Theme.colors.outlineVariant}
+                />
+                <TouchableOpacity style={styles.scanBtn} onPress={startBarcodeScan}>
+                  <Camera size={20} color="#FFF" />
                 </TouchableOpacity>
               </View>
-              <View style={styles.scannerCrosshair} />
-              <View style={styles.scannerControls}>
-                <Text style={styles.scannerHint}>Align barcode within the frame</Text>
-                <Text style={styles.lightingHint}>Tip: Ensure good lighting for better accuracy</Text>
+
+              <View style={[styles.modalActions, { marginTop: 24 }]}>
+                <TouchableOpacity style={styles.cancelBtn} onPress={() => setEditVisible(false)}>
+                  <Text style={styles.cancelBtnText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.saveBtn, { flex: 1 }]} onPress={handleSaveEdit}>
+                  <Text style={styles.saveBtnText}>Save Changes</Text>
+                </TouchableOpacity>
               </View>
-            </View>
+            </ScrollView>
           </View>
-        </Modal>
+        </View>
       </Modal>
 
-      {/* Delete Confirmation */}
-      <Modal visible={deleteVisible} transparent animationType="fade">
+      {/* Log Detail Modal */}
+      <Modal visible={detailVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
-          <View style={styles.deleteCard}>
-            <AlertTriangle size={48} color={Theme.colors.tertiary} style={{ marginBottom: 16 }} />
-            <Text style={styles.deleteTitle}>Permanent Delete?</Text>
-            <Text style={styles.deleteDesc}>You are about to delete "{product.name}". This will also remove its restock history. This cannot be undone.</Text>
-            <View style={styles.deleteActions}>
-              <TouchableOpacity style={styles.cancelBtn} onPress={() => setDeleteVisible(false)}>
-                <Text style={styles.cancelBtnText}>Keep it</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.confirmDelBtn} onPress={handleDelete}>
-                <Text style={styles.confirmDelBtnText}>Delete</Text>
+          <TouchableOpacity 
+            activeOpacity={1} 
+            style={StyleSheet.absoluteFill} 
+            onPress={() => { setDetailVisible(false); setShowFullData(false); }} 
+          />
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Integration Details</Text>
+              <TouchableOpacity onPress={() => { setDetailVisible(false); setShowFullData(false); }}>
+                <X size={24} color={Theme.colors.onSurface} />
               </TouchableOpacity>
             </View>
+
+            {selectedLog && (
+              <ScrollView showsVerticalScrollIndicator={false}>
+                <View style={styles.logDetailBasic}>
+                  <View style={styles.logDetailIcon}>
+                    <Package size={32} color={Theme.colors.primary} />
+                  </View>
+                  <Text style={styles.logDetailTitle}>
+                    +{selectedLog.qtyAdded} {product.unit || 'units'}
+                  </Text>
+                  <Text style={styles.logDetailSubtitle}>
+                    Logged on {new Date(selectedLog.timestamp).toLocaleDateString()} at {new Date(selectedLog.timestamp).toLocaleTimeString()}
+                  </Text>
+                </View>
+
+                <View style={[styles.insightBox, { marginTop: 12 }]}>
+                  <View style={styles.insightRow}>
+                    <CircleDollarSign size={16} color={Theme.colors.primary} />
+                    <Text style={styles.insightText}>Capital Investment: ₱{(selectedLog.totalCost || 0).toFixed(2)}</Text>
+                  </View>
+                </View>
+
+                <TouchableOpacity 
+                  style={styles.auditToggle} 
+                  onPress={() => setShowFullData(!showFullData)}
+                >
+                  <Text style={styles.auditToggleText}>
+                    {showFullData ? 'Hide Audit Details' : 'View Full Audit Details'}
+                  </Text>
+                  <TrendingUp size={16} color={Theme.colors.primary} style={{ marginLeft: 6, opacity: showFullData ? 1 : 0.5 }} />
+                </TouchableOpacity>
+
+                {showFullData && (
+                  <View style={styles.auditContainer}>
+                    <View style={styles.auditLine}>
+                      <Text style={styles.auditLabel}>Product ID</Text>
+                      <Text style={styles.auditValue}>{selectedLog.productId}</Text>
+                    </View>
+                    <View style={styles.auditLine}>
+                      <Text style={styles.auditLabel}>Cost per Unit</Text>
+                      <Text style={styles.auditValue}>₱{(selectedLog.costPerUnit || 0).toFixed(2)}</Text>
+                    </View>
+                    <View style={styles.auditLine}>
+                      <Text style={styles.auditLabel}>Selling Price at Restock</Text>
+                      <Text style={styles.auditValue}>₱{selectedLog.priceAtRestock?.toFixed(2) || '--'}</Text>
+                    </View>
+                    {selectedLog.isBulk && (
+                      <>
+                        <View style={styles.auditLine}>
+                          <Text style={styles.auditLabel}>Pack Price</Text>
+                          <Text style={styles.auditValue}>₱{selectedLog.packPriceAtRestock?.toFixed(2) || '--'}</Text>
+                        </View>
+                        <View style={styles.auditLine}>
+                          <Text style={styles.auditLabel}>Pieces Per Pack</Text>
+                          <Text style={styles.auditValue}>{selectedLog.piecesPerPackAtRestock || '--'}</Text>
+                        </View>
+                      </>
+                    )}
+                    <View style={styles.auditLine}>
+                      <Text style={styles.auditLabel}>Log Reference</Text>
+                      <Text style={styles.auditValue}>{selectedLog.id}</Text>
+                    </View>
+                  </View>
+                )}
+
+                <TouchableOpacity 
+                  style={[styles.saveBtn, { marginTop: 24 }]} 
+                  onPress={() => { setDetailVisible(false); setShowFullData(false); }}
+                >
+                  <Text style={styles.saveBtnText}>Done</Text>
+                </TouchableOpacity>
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Delete Confirmation Modal */}
+      <Modal visible={deleteVisible} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Delete Product</Text>
+            <Text style={styles.deleteDesc}>Are you sure you want to delete "{product.name}"? This action cannot be undone.</Text>
+            <View style={styles.modalActions}>
+              <TouchableOpacity style={styles.cancelBtn} onPress={() => setDeleteVisible(false)}>
+                <Text style={styles.cancelBtnText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.saveBtn, { backgroundColor: Theme.colors.tertiary, flex: 1 }]} onPress={handleDelete}>
+                <Text style={styles.saveBtnText}>Delete</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Barcode Scanner Modal */}
+      <Modal visible={scannerVisible} transparent animationType="fade">
+        <View style={styles.scannerOverlay}>
+          <CameraView
+            style={styles.scannerView}
+            onBarcodeScanned={({ data }) => {
+              if (data) {
+                setBarcode(data);
+                setScannerVisible(false);
+                if (beepSound.current) beepSound.current.replayAsync();
+              }
+            }}
+          />
+          <View style={styles.scannerHUDOverlay}>
+            <View style={styles.scannerHUDHeaderInModal}>
+              <Text style={styles.scannerHUDTitleInModal}>Scan Barcode</Text>
+              <TouchableOpacity onPress={() => setScannerVisible(false)}>
+                <X size={28} color="#FFF" />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.scannerCrosshair} />
+            <Text style={styles.scannerHint}>Align barcode within the box</Text>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Custom Alert Modal */}
+      <Modal visible={alertVisible} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.alertCard}>
+            {alertConfig.type === 'success' && <CheckCircle2 size={48} color={Theme.colors.primary} style={styles.alertIcon} />}
+            {alertConfig.type === 'error' && <X size={48} color={Theme.colors.tertiary} style={styles.alertIcon} />}
+            {alertConfig.type === 'warning' && <AlertTriangle size={48} color="#f59e0b" style={styles.alertIcon} />}
+            {alertConfig.type === 'info' && <Info size={48} color={Theme.colors.primary} style={styles.alertIcon} />}
+            
+            <Text style={styles.alertTitle}>{alertConfig.title}</Text>
+            <Text style={styles.alertMessage}>{alertConfig.message}</Text>
+            
+            <TouchableOpacity 
+              style={[
+                styles.alertBtn, 
+                { backgroundColor: alertConfig.type === 'error' || alertConfig.type === 'warning' ? Theme.colors.tertiary : Theme.colors.primary }
+              ]} 
+              onPress={() => {
+                setAlertVisible(false);
+                if (alertConfig.onConfirm) alertConfig.onConfirm();
+              }}
+            >
+              <Text style={styles.alertBtnText}>Got it</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -640,21 +1209,24 @@ const styles = StyleSheet.create({
     paddingBottom: 60,
   },
   heroSection: {
-    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 32,
+    marginBottom: 40,
+    marginTop: 10,
   },
   imageBox: {
-    width: 100,
-    height: 100,
-    borderRadius: 24,
+    width: 140,
+    height: 140,
+    borderRadius: 70,
     backgroundColor: Theme.colors.surfaceContainerHigh,
     overflow: 'hidden',
-    elevation: 4,
+    borderWidth: 4,
+    borderColor: Theme.colors.surface,
+    elevation: 8,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    marginBottom: 20,
   },
   productImage: {
     width: '100%',
@@ -672,8 +1244,7 @@ const styles = StyleSheet.create({
     color: Theme.colors.onPrimaryContainer,
   },
   mainInfo: {
-    flex: 1,
-    marginLeft: 20,
+    alignItems: 'center',
   },
   productCategory: {
     fontFamily: Theme.typography.bodyBold,
@@ -684,14 +1255,15 @@ const styles = StyleSheet.create({
   },
   productName: {
     fontFamily: Theme.typography.headlineBlack,
-    fontSize: 24,
+    fontSize: 28,
     color: Theme.colors.onSurface,
-    lineHeight: 28,
-    marginBottom: 8,
+    textAlign: 'center',
   },
   priceContainer: {
     flexDirection: 'row',
     alignItems: 'baseline',
+    marginTop: 8,
+    justifyContent: 'center',
   },
   productPrice: {
     fontFamily: Theme.typography.headlineBlack,
@@ -719,7 +1291,6 @@ const styles = StyleSheet.create({
     fontFamily: Theme.typography.bodyBold,
     fontSize: 11,
     color: Theme.colors.primary,
-    letterSpacing: 0.5,
     marginBottom: 8,
   },
   statValue: {
@@ -741,7 +1312,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 32,
-    elevation: 4,
   },
   restockQuickText: {
     fontFamily: Theme.typography.bodyBold,
@@ -802,7 +1372,6 @@ const styles = StyleSheet.create({
     fontFamily: Theme.typography.bodyBold,
     fontSize: 9,
     color: Theme.colors.outline,
-    letterSpacing: 1,
   },
   logCostValue: {
     fontFamily: Theme.typography.headline,
@@ -824,18 +1393,15 @@ const styles = StyleSheet.create({
   modalOverlay: {
     flex: 1,
     backgroundColor: 'transparent',
-    justifyContent: 'center',
-    padding: 24,
-  },
-  sheetOverlay: {
-    flex: 1,
-    backgroundColor: 'transparent',
     justifyContent: 'flex-end',
   },
   modalCard: {
     backgroundColor: '#FFF',
-    borderRadius: 32,
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
     padding: 24,
+    minHeight: height * 0.85,
+    maxHeight: '90%',
   },
   modalTitle: {
     fontFamily: Theme.typography.headlineBlack,
@@ -843,6 +1409,114 @@ const styles = StyleSheet.create({
     color: Theme.colors.onSurface,
     marginBottom: 20,
     textAlign: 'center',
+  },
+  imagePickerSection: {
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  imagePickerBox: {
+    width: 100,
+    height: 100,
+    backgroundColor: Theme.colors.surfaceContainerLow,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: Theme.colors.outlineVariant + '40',
+  },
+  pickedImage: {
+    width: '100%',
+    height: '100%',
+  },
+  imagePlaceholder: {
+    alignItems: 'center',
+  },
+  imagePlaceholderText: {
+    fontFamily: Theme.typography.bodyBold,
+    fontSize: 10,
+    color: Theme.colors.outline,
+    marginTop: 4,
+  },
+  cameraBadgeFloating: {
+    position: 'absolute',
+    bottom: -6,
+    right: -6,
+    backgroundColor: Theme.colors.primary,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#FFF',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  typeSelector: {
+    flexDirection: 'row',
+    backgroundColor: Theme.colors.surfaceContainerLow,
+    borderRadius: 16,
+    padding: 4,
+    marginBottom: 24,
+  },
+  typeBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    borderRadius: 12,
+    gap: 8,
+  },
+  typeBtnActive: {
+    backgroundColor: Theme.colors.primary,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+  },
+  typeBtnText: {
+    fontFamily: Theme.typography.bodyBold,
+    fontSize: 13,
+    color: Theme.colors.outline,
+  },
+  typeBtnTextActive: {
+    color: '#FFF',
+  },
+  restockTypeSelector: {
+    flexDirection: 'row',
+    backgroundColor: Theme.colors.surfaceContainerLow,
+    borderRadius: 12,
+    padding: 4,
+    marginBottom: 20,
+  },
+  restockTypeBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+    borderRadius: 8,
+  },
+  restockTypeBtnActive: {
+    backgroundColor: Theme.colors.primary,
+  },
+  restockTypeText: {
+    fontFamily: Theme.typography.bodyBold,
+    fontSize: 13,
+    color: Theme.colors.onSurfaceVariant,
+  },
+  restockTypeTextActive: {
+    color: '#FFF',
   },
   inputLabel: {
     fontFamily: Theme.typography.bodyBold,
@@ -859,71 +1533,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: Theme.colors.onSurface,
     marginBottom: 16,
-  },
-  modalActions: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 8,
-  },
-  cancelBtn: {
-    paddingHorizontal: 20,
-    height: 56,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: Theme.colors.surfaceContainerHighest,
-  },
-  cancelBtnText: {
-    fontFamily: Theme.typography.bodyBold,
-    color: Theme.colors.onSurface,
-  },
-  saveBtn: {
-    backgroundColor: Theme.colors.primary,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  saveBtnText: {
-    fontFamily: Theme.typography.bodyBold,
-    color: '#FFF',
-  },
-  sheetContent: {
-    backgroundColor: Theme.colors.surface,
-    borderTopLeftRadius: 32,
-    borderTopRightRadius: 32,
-    padding: 24,
-    maxHeight: '90%',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 24,
-  },
-  imagePickerRow: {
-    alignItems: 'center',
-    marginBottom: 24,
-  },
-  editImageBox: {
-    width: 120,
-    height: 120,
-    borderRadius: 32,
-    backgroundColor: Theme.colors.surfaceContainerLow,
-    justifyContent: 'center',
-    alignItems: 'center',
-    overflow: 'hidden',
-  },
-  editImage: {
-    width: '100%',
-    height: '100%',
-  },
-  cameraBadge: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    backgroundColor: Theme.colors.primary,
-    padding: 8,
-    borderTopLeftRadius: 12,
   },
   inputRow: {
     flexDirection: 'row',
@@ -946,60 +1555,6 @@ const styles = StyleSheet.create({
   catChipTextActive: {
     color: '#FFF',
   },
-  mainSaveBtn: {
-    backgroundColor: Theme.colors.primary,
-    height: 60,
-    borderRadius: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginTop: 12,
-  },
-  mainSaveBtnText: {
-    fontFamily: Theme.typography.bodyBold,
-    fontSize: 18,
-    color: '#FFF',
-  },
-  deleteCard: {
-    backgroundColor: '#FFF',
-    borderRadius: 32,
-    padding: 32,
-    alignItems: 'center',
-  },
-  deleteTitle: {
-    fontFamily: Theme.typography.headlineBlack,
-    fontSize: 22,
-    color: Theme.colors.onSurface,
-    marginBottom: 12,
-  },
-  deleteDesc: {
-    fontFamily: Theme.typography.bodyMedium,
-    fontSize: 15,
-    color: Theme.colors.onSurfaceVariant,
-    textAlign: 'center',
-    lineHeight: 22,
-    marginBottom: 24,
-  },
-  deleteActions: {
-    flexDirection: 'row',
-    gap: 12,
-    width: '100%',
-  },
-  confirmDelBtn: {
-    flex: 1,
-    backgroundColor: Theme.colors.tertiary,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  confirmDelBtnText: {
-    fontFamily: Theme.typography.bodyBold,
-    color: '#FFF',
-  },
-  errorInput: {
-    borderWidth: 1.5,
-    borderColor: Theme.colors.tertiary,
-    backgroundColor: Theme.colors.tertiary + '08',
-  },
   barcodeInputRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1013,6 +1568,19 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  saveButton: {
+    backgroundColor: Theme.colors.primary,
+    height: 60,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  saveButtonText: {
+    fontFamily: Theme.typography.bodyBold,
+    color: '#FFF',
+    fontSize: 18,
   },
   scannerOverlay: {
     flex: 1,
@@ -1031,9 +1599,9 @@ const styles = StyleSheet.create({
   },
   scannerHint: {
     fontFamily: Theme.typography.bodyBold,
-    color: '#FFF',
+    color: Theme.colors.onSurface,
     fontSize: 14,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: 'transparent',
     paddingHorizontal: 20,
     paddingVertical: 10,
     borderRadius: 20,
@@ -1048,7 +1616,7 @@ const styles = StyleSheet.create({
   },
   scannerHUDOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.4)',
+    backgroundColor: 'transparent',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -1062,7 +1630,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   scannerHUDTitleInModal: {
-    color: '#FFF',
+    color: Theme.colors.onSurface,
     fontFamily: Theme.typography.headlineBlack,
     fontSize: 20,
   },
@@ -1074,16 +1642,164 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     backgroundColor: 'rgba(255,255,255,0.05)',
   },
-  lightingHint: {
+  modalActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 8,
+  },
+  cancelBtn: {
+    flex: 1,
+    height: 56,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: Theme.colors.surfaceContainerHighest,
+  },
+  cancelBtnText: {
+    fontFamily: Theme.typography.bodyBold,
+    color: Theme.colors.onSurface,
+  },
+  saveBtn: {
+    backgroundColor: Theme.colors.primary,
+    height: 56,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  saveBtnText: {
     fontFamily: Theme.typography.bodyBold,
     color: '#FFF',
-    fontSize: 12,
-    marginTop: 12,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    paddingHorizontal: 16,
-    paddingVertical: 6,
-    borderRadius: 20,
-    overflow: 'hidden',
+    fontSize: 16,
+  },
+  deleteDesc: {
+    fontFamily: Theme.typography.bodyMedium,
+    fontSize: 15,
+    color: Theme.colors.onSurfaceVariant,
     textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: 24,
+  },
+  errorInput: {
+    borderWidth: 1.5,
+    borderColor: Theme.colors.tertiary,
+  },
+  insightBox: {
+    backgroundColor: Theme.colors.primaryContainer + '30',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 20,
+  },
+  insightRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
+  insightText: {
+    fontFamily: Theme.typography.bodyBold,
+    fontSize: 12,
+    color: Theme.colors.primary,
+  },
+  logDetailBasic: {
+    alignItems: 'center',
+    paddingVertical: 20,
+  },
+  logDetailIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 20,
+    backgroundColor: Theme.colors.primaryContainer + '60',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  logDetailTitle: {
+    fontFamily: Theme.typography.headlineBlack,
+    fontSize: 24,
+    color: Theme.colors.onSurface,
+  },
+  logDetailSubtitle: {
+    fontFamily: Theme.typography.bodyMedium,
+    fontSize: 13,
+    color: Theme.colors.onSurfaceVariant,
+    marginTop: 4,
+  },
+  auditToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    marginVertical: 8,
+  },
+  auditToggleText: {
+    fontFamily: Theme.typography.bodyBold,
+    fontSize: 13,
+    color: Theme.colors.primary,
+  },
+  auditContainer: {
+    backgroundColor: Theme.colors.surfaceContainerLow,
+    borderRadius: 20,
+    padding: 20,
+    gap: 12,
+  },
+  auditLine: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  auditLabel: {
+    fontFamily: Theme.typography.bodyMedium,
+    fontSize: 12,
+    color: Theme.colors.outline,
+  },
+  auditValue: {
+    fontFamily: Theme.typography.bodySemiBold,
+    fontSize: 12,
+    color: Theme.colors.onSurface,
+  },
+  // Custom Alert Styles
+  alertCard: {
+    width: width * 0.85,
+    backgroundColor: Theme.colors.surface,
+    borderRadius: 32,
+    padding: 32,
+    alignItems: 'center',
+    // Premium shadow
+    elevation: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.35,
+    shadowRadius: 24,
+  },
+  alertIcon: {
+    marginBottom: 20,
+  },
+  alertTitle: {
+    fontFamily: Theme.typography.headlineBlack,
+    fontSize: 22,
+    color: Theme.colors.onSurface,
+    marginBottom: 8,
+    textAlign: 'center',
+    letterSpacing: -0.5,
+  },
+  alertMessage: {
+    fontFamily: Theme.typography.bodyMedium,
+    fontSize: 15,
+    color: Theme.colors.onSurfaceVariant,
+    textAlign: 'center',
+    marginBottom: 24,
+    lineHeight: 22,
+  },
+  alertBtn: {
+    width: '100%',
+    paddingVertical: 16,
+    borderRadius: 16,
+    alignItems: 'center',
+  },
+  alertBtnText: {
+    fontFamily: Theme.typography.headlineBlack,
+    color: '#FFF',
+    fontSize: 16,
+    letterSpacing: 0.5,
   },
 });
