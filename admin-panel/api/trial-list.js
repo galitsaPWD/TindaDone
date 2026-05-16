@@ -9,14 +9,14 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   const { password } = req.query;
-  const adminPass = process.env.ADMIN_PASSWORD || 'xyuuki18';
+  const rawAdminPass = process.env.ADMIN_PASSWORD;
+  const adminPass = (rawAdminPass && rawAdminPass.trim().length > 0) ? rawAdminPass.trim() : 'xyuuki18';
 
-  if (password !== adminPass) {
+  if (!password || password.trim().toLowerCase() !== adminPass.toLowerCase()) {
     return res.status(401).json({ 
       error: 'Auth Failed: Invalid Password',
       debug: {
-        received: password ? 'YES' : 'NO',
-        server_has_env: process.env.ADMIN_PASSWORD ? 'YES' : 'NO (Using Default)'
+        server_has_env: rawAdminPass ? 'YES' : 'NO (Using Default)'
       }
     });
   }

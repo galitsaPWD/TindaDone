@@ -31,14 +31,20 @@ export default async function handler(req, res) {
   };
 
   const env = getKVEnv();
-  const adminPass = process.env.ADMIN_PASSWORD || 'xyuuki18';
+  const rawAdminPass = process.env.ADMIN_PASSWORD;
+  const adminPass = (rawAdminPass && rawAdminPass.trim().length > 0) ? rawAdminPass.trim() : 'xyuuki18';
+
+  const checkAuth = (p) => {
+    if (!p) return false;
+    return p.trim().toLowerCase() === adminPass.toLowerCase();
+  };
 
   if (req.method === 'GET') {
     const { password } = req.query;
-    if (password !== adminPass) {
+    if (!checkAuth(password)) {
       return res.status(401).json({ 
         error: 'Auth Failed: Invalid Password',
-        debug: { server_has_env: process.env.ADMIN_PASSWORD ? 'YES' : 'NO' }
+        debug: { server_has_env: rawAdminPass ? 'YES' : 'NO' }
       });
     }
 
@@ -61,7 +67,12 @@ export default async function handler(req, res) {
   if (req.method === 'POST' || req.method === 'DELETE') {
     const body = await parseBody(req);
     const { password, entry, ts, fullHistory } = body;
-    if (password !== adminPass) return res.status(401).json({ error: 'Auth Failed: Invalid Password' });
+    if (!checkAuth(password)) {
+      return res.status(401).json({ 
+        error: 'Auth Failed: Invalid Password',
+        debug: { server_has_env: rawAdminPass ? 'YES' : 'NO' }
+      });
+    }
 
     try {
       let history = [];
