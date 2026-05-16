@@ -611,7 +611,17 @@
 
         function updateStats() {
             document.getElementById('stat-total').innerText = globalHistory.length;
-            const conv = globalTrials.length > 0 ? Math.round((globalHistory.filter(h => h.activated).length / globalTrials.length) * 100) : 0;
+            
+            // 🎯 Real Conversion: How many active licenses match a device that was in a trial?
+            let convertedCount = 0;
+            if (globalTrials.length > 0) {
+                const activeDeviceIds = new Set(globalHistory.filter(h => h.activated).map(h => h.activatedDeviceId || h.code));
+                globalTrials.forEach(trial => {
+                    if (activeDeviceIds.has(trial.deviceId)) convertedCount++;
+                });
+            }
+
+            const conv = globalTrials.length > 0 ? Math.round((convertedCount / globalTrials.length) * 100) : 0;
             document.getElementById('stat-conv').innerText = conv + '%';
         }
 
