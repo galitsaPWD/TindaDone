@@ -55,14 +55,18 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
+  const { password } = req.query;
+  const adminPass = 'xyuuki18'; // 🚀 FORCED MASTER PASSWORD
+
   const env = getKVEnv();
 
   if (req.query.diag === 'true') {
+    if (password !== adminPass) return res.status(401).json({ error: 'Invalid Password' });
     const test = await kvRequest(["PING"], env).catch(e => ({ error: e.message }));
     return res.status(200).json({ 
       db_status: test.result === 'PONG' ? 'CONNECTED' : 'ERROR',
-      db_error: test.error || null,
-      v: '11.0-unbreakable' 
+      db_found: (env.url && env.token) ? 'YES' : 'NO',
+      v: "11.0-unbreakable"
     });
   }
 
