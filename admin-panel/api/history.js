@@ -35,7 +35,12 @@ export default async function handler(req, res) {
 
   if (req.method === 'GET') {
     const { password } = req.query;
-    if (password !== adminPass) return res.status(401).json({ error: 'Auth Failed: Invalid Password' });
+    if (password !== adminPass) {
+      return res.status(401).json({ 
+        error: 'Auth Failed: Invalid Password',
+        debug: { server_has_env: process.env.ADMIN_PASSWORD ? 'YES' : 'NO' }
+      });
+    }
 
     try {
       const response = await fetch(`${env.url}/get/td_key_history`, {

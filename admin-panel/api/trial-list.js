@@ -12,7 +12,13 @@ export default async function handler(req, res) {
   const adminPass = process.env.ADMIN_PASSWORD || 'xyuuki18';
 
   if (password !== adminPass) {
-    return res.status(401).json({ error: 'Auth Failed: Invalid Password' });
+    return res.status(401).json({ 
+      error: 'Auth Failed: Invalid Password',
+      debug: {
+        received: password ? 'YES' : 'NO',
+        server_has_env: process.env.ADMIN_PASSWORD ? 'YES' : 'NO (Using Default)'
+      }
+    });
   }
 
   const getKVEnv = () => {
