@@ -52,6 +52,25 @@ export default function ActivateScreen() {
       if (settings.storeName) setStoreName(settings.storeName);
 
       setLoading(true);
+      
+      // 🔄 AUTO-RECOVERY CHECK
+      // Check if this device is already activated on the server (e.g. after a Restore)
+      try {
+        const PRODUCTION_URL = 'https://tinda-done-admin.vercel.app';
+        const res = await fetch(`${PRODUCTION_URL}/api/check-status?deviceId=${code}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.activated && !data.revoked) {
+            console.log('[License] Auto-recovery triggered. Unlocking...');
+            await saveActivation(); // Re-activate locally
+            router.replace('/(tabs)/sell');
+            return;
+          }
+        }
+      } catch (e) {
+        console.log('[License] Auto-recovery check skipped (Offline)');
+      }
+
       await syncTrialWithServer();
       
       const status = await getTrialStatus();
@@ -145,7 +164,7 @@ export default function ActivateScreen() {
         }
       } else {
         // ACTIVATION Persistence
-        await saveActivation();
+        await saveActivation(activationKey);
       }
 
       // Save locally to Settings
@@ -181,20 +200,23 @@ export default function ActivateScreen() {
         style={styles.container}
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
       >
-        <View style={styles.logoArea}>
-          <View style={styles.logoCircle}>
-            <Lock size={32} color="#FFF" />
+        <View style={styles.brandArea}>
+          <View style={styles.logoPill}>
+            <Lock size={32} color="#FFF" strokeWidth={2.5} />
           </View>
           <Text style={styles.appName}>TindaDone</Text>
         </View>
 
-        <Text style={styles.title}>Activation Required</Text>
+        <View style={styles.textGroup}>
+          <Text style={styles.title}>Unlock Full Suite</Text>
+          <Text style={styles.subtitle}>Unlock permanent access to all boutique tools</Text>
+        </View>
         
-        {/* Trial Status Display */}
         {trial?.active && (
-          <View style={[styles.statusBanner, { backgroundColor: Theme.colors.secondaryContainer }]}>
-            <Clock size={16} color={Theme.colors.secondary} style={{ marginRight: 8 }} />
+          <View style={[styles.statusPill, { backgroundColor: Theme.colors.secondaryContainer }]}>
+            <Clock size={16} color={Theme.colors.secondary} />
             <Text style={[styles.statusText, { color: Theme.colors.onSecondaryContainer }]}>
               Trial Active: {trial.daysLeft} days remaining
             </Text>
@@ -202,26 +224,22 @@ export default function ActivateScreen() {
         )}
 
         {trial?.expired && (
-          <View style={[styles.statusBanner, { backgroundColor: '#FFDAD6' }]}>
-            <AlertTriangle size={16} color="#BA1A1A" style={{ marginRight: 8 }} />
+          <View style={[styles.statusPill, { backgroundColor: '#FFDAD6' }]}>
+            <AlertTriangle size={16} color="#BA1A1A" />
             <Text style={[styles.statusText, { color: '#410002' }]}>
-              Free Trial Expired! Please Activate.
+              Free Trial Expired! Activation Required.
             </Text>
           </View>
         )}
 
-        <View style={styles.spacer} />
-
-        {/* Device Code Card */}
-        <View style={styles.codeCard}>
-          <Text style={styles.codeLabel}>YOUR DEVICE CODE</Text>
-          <Text style={styles.codeValue}>{deviceCode}</Text>
-          <Text style={styles.codeHint}>Send this code to your seller to get your key</Text>
+        <View style={styles.certCard}>
+          <Text style={styles.certLabel}>DEVICE CERTIFICATE</Text>
+          <Text style={styles.certValue}>{deviceCode}</Text>
+          <Text style={styles.certHint}>Provide this certificate to your official seller</Text>
         </View>
 
-        {/* Key Input Section */}
-        <View style={styles.inputSection}>
-          <Text style={styles.inputLabel}>ENTER ACTIVATION KEY</Text>
+        <View style={styles.inputSuite}>
+          <Text style={styles.inputLabel}>ACTIVATION KEY</Text>
           <Animated.View style={{ transform: [{ translateX: shakeAnim }] }}>
             <TextInput
               style={[styles.keyInput, error === 'Please enter a valid activation key.' ? styles.keyInputError : null]}
@@ -240,16 +258,17 @@ export default function ActivateScreen() {
         </View>
 
         <TouchableOpacity
-          style={[styles.activateBtn, verifying && { opacity: 0.7 }]}
+          style={[styles.primaryBtn, verifying && { opacity: 0.7 }]}
           onPress={handleActivate}
           disabled={verifying}
+          activeOpacity={0.8}
         >
           {verifying ? (
             <ActivityIndicator color="#FFF" />
           ) : (
             <>
-              <CheckCircle2 size={20} color="#FFF" style={{ marginRight: 8 }} />
-              <Text style={styles.activateBtnText}>Activate App</Text>
+              <CheckCircle2 size={20} color="#FFF" strokeWidth={2.5} />
+              <Text style={styles.primaryBtnText}>Activate Full Suite</Text>
             </>
           )}
         </TouchableOpacity>
@@ -259,19 +278,20 @@ export default function ActivateScreen() {
         {/* Trial Options */}
         {trial?.notStarted && (
           <TouchableOpacity 
-            style={[styles.trialBtn, verifying && { opacity: 0.7 }]} 
+            style={[styles.secondaryBtn, verifying && { opacity: 0.7 }]} 
             onPress={handleStartTrial}
             disabled={verifying}
+            activeOpacity={0.7}
           >
             {verifying ? (
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <ActivityIndicator color={Theme.colors.primary} style={{ marginRight: 8 }} />
-                <Text style={styles.trialBtnText}>Handshaking...</Text>
+                <Text style={styles.secondaryBtnText}>Connecting...</Text>
               </View>
             ) : (
               <>
-                <Play size={18} color={Theme.colors.primary} style={{ marginRight: 8 }} />
-                <Text style={styles.trialBtnText}>Start 3-Day Free Trial</Text>
+                <Play size={18} color={Theme.colors.primary} />
+                <Text style={styles.secondaryBtnText}>Start 3-Day Free Trial</Text>
               </>
             )}
           </TouchableOpacity>
@@ -279,10 +299,11 @@ export default function ActivateScreen() {
 
         {trial?.active && (
           <TouchableOpacity 
-            style={styles.trialBtn} 
+            style={styles.secondaryBtn} 
             onPress={() => router.replace('/(tabs)/sell')}
+            activeOpacity={0.7}
           >
-            <Text style={styles.trialBtnText}>Continue to Dashboard</Text>
+            <Text style={styles.secondaryBtnText}>Enter Dashboard</Text>
           </TouchableOpacity>
         )}
 
@@ -291,58 +312,56 @@ export default function ActivateScreen() {
         </Text>
       </ScrollView>
 
-      {/* 🏙️ Registration Modal */}
       {showNameModal && (
         <View style={styles.modalOverlay}>
           <Animated.View style={styles.modalCard}>
             <View style={styles.modalIcon}>
-              <CheckCircle2 size={32} color={Theme.colors.primary} />
+              <CheckCircle2 size={32} color="#FFF" />
             </View>
-            <Text style={styles.modalTitle}>Success!</Text>
+            <Text style={styles.modalTitle}>Perfect!</Text>
             <Text style={styles.modalSub}>
-              {pendingSuccessType === 'key' ? 'License activated' : 'Trial started'} successfully. 
-              One last thing—what is the name of your Store?
+              {pendingSuccessType === 'key' ? 'License verified' : 'Trial access granted'}. 
+              Enter your official store name to begin.
             </Text>
 
-            <View style={[styles.inputSection, { marginBottom: 20 }]}>
-              <Text style={styles.inputLabel}>BUSINESS / STORE NAME</Text>
-              <Animated.View style={{ transform: [{ translateX: shakeAnim }] }}>
-                <TextInput
-                  style={[styles.keyInput, { fontSize: 16, textAlign: 'center', letterSpacing: 0, paddingHorizontal: 20 }]}
-                  placeholder="e.g. Aling Nena's Store"
-                  placeholderTextColor={Theme.colors.outlineVariant}
-                  value={storeName}
-                  onChangeText={setStoreName}
-                  autoFocus
-                />
-              </Animated.View>
+            <View style={[styles.inputSuite, { marginBottom: 24 }]}>
+              <Text style={styles.inputLabel}>STORE NAME</Text>
+              <TextInput
+                style={[styles.keyInput, { fontSize: 18, textAlign: 'center', letterSpacing: 0, paddingHorizontal: 20 }]}
+                placeholder="e.g. Aling Nena's Boutique"
+                placeholderTextColor={Theme.colors.outlineVariant}
+                value={storeName}
+                onChangeText={setStoreName}
+                autoFocus
+              />
             </View>
 
             <TouchableOpacity 
-              style={styles.activateBtn} 
+              style={styles.primaryBtn} 
               onPress={handleFinalizeOnboarding}
               disabled={verifying}
+              activeOpacity={0.8}
             >
               {verifying ? (
                 <ActivityIndicator color="#FFF" />
               ) : (
-                <Text style={styles.activateBtnText}>Enter My Store</Text>
+                <Text style={styles.primaryBtnText}>Start Managing</Text>
               )}
             </TouchableOpacity>
           </Animated.View>
         </View>
       )}
 
-      {/* Floating Toast Notification */}
+      {/* Boutique Toast */}
       {showToast && (
         <Animated.View style={[
-          styles.toastContainer, 
+          styles.toastBox, 
           { 
             opacity: toastOpacity,
             transform: [{ translateY: toastAnim }]
           }
         ]}>
-          <AlertTriangle size={18} color="#FFF" style={{ marginRight: 10 }} />
+          <AlertTriangle size={18} color="#FFF" />
           <Text style={styles.toastText}>{error}</Text>
         </Animated.View>
       )}
@@ -351,184 +370,214 @@ export default function ActivateScreen() {
 }
 
 const styles = StyleSheet.create({
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: Theme.colors.background,
-  },
   container: {
     flex: 1,
     backgroundColor: Theme.colors.background,
   },
   content: {
     alignItems: 'center',
-    padding: 28,
-    paddingTop: 60,
+    padding: 24,
+    paddingTop: '15%',
     paddingBottom: 120,
   },
-  logoArea: {
+  brandArea: {
     alignItems: 'center',
-    marginBottom: 24,
+    marginBottom: 32,
   },
-  logoCircle: {
-    width: 64,
-    height: 64,
-    borderRadius: 18,
+  logoPill: {
+    width: 72,
+    height: 72,
+    borderRadius: 24,
     backgroundColor: Theme.colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 16,
+    shadowColor: Theme.colors.primary,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 8,
   },
   appName: {
     fontFamily: Theme.typography.headlineBlack,
-    fontSize: 20,
+    fontSize: 22,
     color: Theme.colors.onSurface,
+    letterSpacing: 0.5,
+  },
+  textGroup: {
+    alignItems: 'center',
+    marginBottom: 32,
   },
   title: {
     fontFamily: Theme.typography.headlineBlack,
-    fontSize: 24,
+    fontSize: 28,
     color: Theme.colors.onSurface,
-    marginBottom: 16,
-    textAlign: 'center',
+    marginBottom: 8,
+    letterSpacing: -1,
   },
-  statusBanner: {
+  subtitle: {
+    fontFamily: Theme.typography.bodySemiBold,
+    fontSize: 14,
+    color: Theme.colors.outline,
+    textAlign: 'center',
+    paddingHorizontal: 20,
+  },
+  statusPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 12,
-    marginBottom: 24,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 16,
+    marginBottom: 32,
+    gap: 10,
   },
   statusText: {
     fontFamily: Theme.typography.bodyBold,
     fontSize: 13,
   },
-  codeCard: {
+  certCard: {
     width: '100%',
-    backgroundColor: Theme.colors.primaryContainer,
-    borderRadius: 24,
-    padding: 24,
+    backgroundColor: Theme.colors.surfaceContainerLowest,
+    borderRadius: 32,
+    padding: 28,
     alignItems: 'center',
-    marginBottom: 24,
+    marginBottom: 32,
+    borderWidth: 1,
+    borderColor: Theme.colors.outlineVariant,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.05,
+    shadowRadius: 20,
+    elevation: 4,
   },
-  codeLabel: {
+  certLabel: {
     fontFamily: Theme.typography.bodyBold,
     fontSize: 10,
-    color: Theme.colors.onPrimaryContainer,
-    letterSpacing: 1.5,
-    marginBottom: 8,
-  },
-  codeValue: {
-    fontFamily: Theme.typography.headlineBlack,
-    fontSize: 28,
     color: Theme.colors.primary,
+    letterSpacing: 2,
+    marginBottom: 12,
+  },
+  certValue: {
+    fontFamily: Theme.typography.headlineBlack,
+    fontSize: 32,
+    color: Theme.colors.onSurface,
     letterSpacing: 2,
     marginBottom: 8,
   },
-  codeHint: {
-    fontFamily: Theme.typography.body,
+  certHint: {
+    fontFamily: Theme.typography.bodyMedium,
     fontSize: 11,
-    color: Theme.colors.onSurfaceVariant,
+    color: Theme.colors.outline,
     textAlign: 'center',
   },
-  inputSection: {
+  inputSuite: {
     width: '100%',
-    marginBottom: 16,
+    marginBottom: 24,
   },
   inputLabel: {
     fontFamily: Theme.typography.bodyBold,
-    fontSize: 10,
+    fontSize: 11,
     color: Theme.colors.primary,
-    letterSpacing: 1.2,
-    marginBottom: 8,
+    letterSpacing: 1.5,
+    marginBottom: 12,
     marginLeft: 4,
   },
   keyInput: {
-    backgroundColor: Theme.colors.surfaceContainerLow,
-    borderRadius: 16,
-    padding: 16,
+    backgroundColor: Theme.colors.surfaceContainerLowest,
+    borderRadius: 20,
+    height: 72,
     fontFamily: Theme.typography.headlineBlack,
-    fontSize: 20,
+    fontSize: 24,
     color: Theme.colors.onSurface,
     textAlign: 'center',
-    letterSpacing: 3,
+    letterSpacing: 4,
     borderWidth: 2,
-    borderColor: 'transparent',
+    borderColor: Theme.colors.outlineVariant,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 2,
   },
   keyInputError: {
-    borderColor: '#BA1A1A',
-  },
-  spacer: {
-    height: 10,
+    borderColor: Theme.colors.tertiary,
+    backgroundColor: Theme.colors.tertiary + '05',
   },
   divider: {
     height: 1,
-    width: '80%',
-    backgroundColor: Theme.colors.surfaceVariant,
-    marginVertical: 24,
+    width: '60%',
+    backgroundColor: Theme.colors.outlineVariant,
+    marginVertical: 32,
     opacity: 0.5,
   },
-  toastContainer: {
+  toastBox: {
     position: 'absolute',
-    bottom: 50,
+    bottom: 40,
     left: 20,
     right: 20,
-    backgroundColor: '#BA1A1A',
-    borderRadius: 16,
-    padding: 16,
+    backgroundColor: Theme.colors.tertiary,
+    borderRadius: 20,
+    padding: 20,
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 12,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
+    shadowOffset: { width: 0, height: 10 },
     shadowOpacity: 0.3,
-    shadowRadius: 10,
-    elevation: 8,
+    shadowRadius: 20,
+    elevation: 10,
   },
   toastText: {
     fontFamily: Theme.typography.bodyBold,
-    fontSize: 13,
+    fontSize: 14,
     color: '#FFF',
     flex: 1,
   },
-  activateBtn: {
+  primaryBtn: {
     width: '100%',
     backgroundColor: Theme.colors.primary,
-    borderRadius: 20,
-    padding: 16,
+    borderRadius: 24,
+    height: 64,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 16,
+    gap: 12,
+    shadowColor: Theme.colors.primary,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 8,
   },
-  activateBtnText: {
+  primaryBtnText: {
     fontFamily: Theme.typography.headlineBlack,
-    fontSize: 16,
+    fontSize: 18,
     color: '#FFF',
+    letterSpacing: 0.5,
   },
-  trialBtn: {
+  secondaryBtn: {
     width: '100%',
-    backgroundColor: 'transparent',
-    borderRadius: 20,
-    padding: 16,
+    height: 64,
+    borderRadius: 24,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
     borderColor: Theme.colors.primary,
-    marginBottom: 20,
+    gap: 12,
   },
-  trialBtnText: {
+  secondaryBtnText: {
     fontFamily: Theme.typography.headlineBlack,
     fontSize: 16,
     color: Theme.colors.primary,
+    letterSpacing: 0.5,
   },
   footer: {
-    fontFamily: Theme.typography.body,
-    fontSize: 11,
+    fontFamily: Theme.typography.bodyMedium,
+    fontSize: 12,
     color: Theme.colors.outline,
     textAlign: 'center',
-    marginTop: 10,
+    marginTop: 16,
+    opacity: 0.7,
   },
   modalOverlay: {
     position: 'absolute',
@@ -539,29 +588,41 @@ const styles = StyleSheet.create({
     zIndex: 1000,
   },
   modalCard: {
-    backgroundColor: '#FFF',
-    borderRadius: 32,
-    padding: 32,
+    backgroundColor: Theme.colors.surface,
+    borderRadius: 40,
+    padding: 40,
     alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 20 },
+    shadowOpacity: 0.2,
+    shadowRadius: 30,
+    elevation: 20,
   },
   modalIcon: {
-    width: 64, height: 64, borderRadius: 32,
-    backgroundColor: Theme.colors.secondaryContainer,
+    width: 80, height: 80, borderRadius: 28,
+    backgroundColor: Theme.colors.primary,
     justifyContent: 'center', alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 24,
   },
   modalTitle: {
     fontFamily: Theme.typography.headlineBlack,
-    fontSize: 24,
-    color: '#000',
-    marginBottom: 8,
+    fontSize: 28,
+    color: Theme.colors.onSurface,
+    marginBottom: 12,
+    letterSpacing: -1,
   },
   modalSub: {
-    fontFamily: Theme.typography.body,
-    fontSize: 14,
+    fontFamily: Theme.typography.bodySemiBold,
+    fontSize: 15,
     color: Theme.colors.outline,
     textAlign: 'center',
-    marginBottom: 28,
-    lineHeight: 20,
+    marginBottom: 32,
+    lineHeight: 22,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: Theme.colors.background,
   },
 });

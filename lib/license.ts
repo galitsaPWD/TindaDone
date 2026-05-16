@@ -9,10 +9,11 @@ const TRIAL_START_KEY = '@tindadone/trial_start';
 const TRIAL_DAYS = 3;
 
 // 🔗 Vercel Admin API URL
-const API_BASE_URL = 'https://tinda-done-admin.vercel.app'; // ← Change this to your live URL!
+// CRITICAL: Update this to your deployed Vercel URL
+const PRODUCTION_URL = 'https://tinda-done-admin.vercel.app';
+const API_BASE_URL = PRODUCTION_URL; 
 
-// ⚠️ THIS MUST MATCH THE SECRET IN YOUR ADMIN PAGE — KEEP IT PRIVATE
-const ADMIN_SECRET = 'tindadone_admin_2025_zyxw';
+const ADMIN_SECRET = 'tindadone_admin_2026_xyz';
 
 async function sha256(input: string): Promise<string> {
   return Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, input);
@@ -52,14 +53,33 @@ export async function generateDeviceCode(): Promise<string> {
 
 /** Validates the activation key the customer typed against the device code */
 export async function validateActivationKey(deviceCode: string, enteredKey: string): Promise<boolean> {
-  const hash = await sha256(deviceCode + ADMIN_SECRET);
-  const clean = hash.toUpperCase().replace(/[^A-Z0-9]/g, '');
-  const expected = `${clean.slice(0, 4)}${clean.slice(4, 8)}${clean.slice(8, 12)}`;
+  // Strip "TD" prefix if present to ensure consistent hashing
+  let cleanVal = deviceCode.toUpperCase().replace(/^TD-/, '').replace(/^TD/, '');
+  cleanVal = cleanVal.replace(/[^A-Z0-9]/g, '');
+
+  const salt = "TindaDone-Premium-2026";
+  let hash = 0;
+  const combined = cleanVal + salt;
+  
+  for (let i = 0; i < combined.length; i++) {
+    hash = ((hash << 5) - hash) + combined.charCodeAt(i);
+    hash |= 0;
+  }
+  
+  const part1 = Math.abs(hash).toString(36).toUpperCase().substring(0, 4);
+  const expectedKey = `TD-${part1}-${cleanVal.substring(0, 4)}`;
 
   // Clean the entered key as well
-  const enteredClean = enteredKey.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const enteredClean = enteredKey.trim().toUpperCase();
 
-  return enteredClean === expected;
+  console.log('[License] Validating:', { 
+    deviceCode, 
+    cleanVal, 
+    expected: expectedKey, 
+    entered: enteredClean 
+  });
+
+  return enteredClean === expectedKey;
 }
 
 /** Returns true if this device has already been activated */
@@ -72,33 +92,89 @@ export async function isActivated(): Promise<boolean> {
   }
 }
 
-/** Permanently marks this device as activated */
-export async function saveActivation(): Promise<void> {
-  await AsyncStorage.setItem(ACTIVATION_STORAGE_KEY, 'true');
+/** Permanently marks this device as activated and reports it to the cloud */
+export async function saveActivation(licenseKey?: string): Promise<void> {
+  try {
+    await AsyncStorage.setItem(ACTIVATION_STORAGE_KEY, 'true');
+    
+    if (licenseKey) {
+      const deviceId = await generateDeviceCode();
+      // Silently report to server
+      fetch(`${API_BASE_URL}/api/activate-key`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ licenseKey, deviceId })
+      }).catch(e => console.log('Activation report skipped', e));
+    }
+  } catch (e) {
+    console.error('Failed to save activation:', e);
+  }
 }
 
-/** Starts the trial precisely now */
+/** Silently checks if the admin revoked this device's license */
+export async function syncActivationStatus(): Promise<void> {
+  try {
+    const isAct = await isActivated();
+    if (!isAct) return;
+
+    const deviceId = await generateDeviceCode();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+    const res = await fetch(`${API_BASE_URL}/api/check-status?deviceId=${deviceId}`, {
+      signal: controller.signal
+    }).catch(() => null);
+    
+    clearTimeout(timeoutId);
+
+    if (res && res.ok) {
+      const data = await res.json();
+      if (data && data.revoked) {
+        // KILL SWITCH TRIGGERED: Remove local activation
+        await AsyncStorage.removeItem(ACTIVATION_STORAGE_KEY);
+      }
+    }
+  } catch (e) {
+    // Fail silently, preserve offline functionality
+  }
+}
+
 export async function startTrial(storeName?: string): Promise<{ success: boolean; error?: string }> {
   const deviceId = await getOrCreateDeviceId();
 
   try {
-    // 1. Handshake with server
-    const response = await fetch(`${API_BASE_URL}/api/trial-start`, {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+    // 1. Attempt Handshake with server
+    console.log('🔗 Connecting to Admin Server:', `${API_BASE_URL}/api/trial-start`);
+    const res = await fetch(`${API_BASE_URL}/api/trial-start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deviceId, storeName: storeName || 'Unknown store' })
+      body: JSON.stringify({ deviceId, storeName: storeName || 'Unknown store' }),
+      signal: controller.signal
+    }).catch(err => {
+      console.warn('❌ Network Error during Trial Start:', err);
+      return null;
     });
 
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.message || 'Server error');
+    if (res && res.ok) {
+      console.log('✅ Server Registration Success!');
+    } else {
+      console.warn('⚠️ Server rejected registration or is offline:', res?.status);
+    }
 
-    // 2. Persist locally
-    const startTime = data.startTime || Date.now().toString();
+    clearTimeout(timeoutId);
+
+    // 2. Local Fallback (Always succeed locally to avoid blocking)
+    const startTime = Date.now().toString();
     await AsyncStorage.setItem(TRIAL_START_KEY, startTime);
     return { success: true };
+
   } catch (e) {
-    console.error('Trial start failed:', e);
-    return { success: false, error: e instanceof Error ? e.message : 'No internet connection. Trial requires 1-second handshake.' };
+    // Absolute fallback
+    await AsyncStorage.setItem(TRIAL_START_KEY, Date.now().toString());
+    return { success: true };
   }
 }
 
@@ -106,16 +182,24 @@ export async function startTrial(storeName?: string): Promise<{ success: boolean
 export async function syncTrialWithServer(): Promise<void> {
   try {
     const deviceId = await getOrCreateDeviceId();
-    const res = await fetch(`${API_BASE_URL}/api/trial-status?deviceId=${deviceId}`);
-    if (res.ok) {
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+    const res = await fetch(`${API_BASE_URL}/api/trial-status?deviceId=${deviceId}`, {
+      signal: controller.signal
+    }).catch(() => null);
+    
+    clearTimeout(timeoutId);
+
+    if (res && res.ok) {
       const data = await res.json();
-      if (data.exists && data.startTime) {
-        // If server says we have an older start date, honor the server (prevents reset)
+      if (data && data.exists && data.startTime) {
         await AsyncStorage.setItem(TRIAL_START_KEY, data.startTime);
       }
     }
   } catch (e) {
-    // Fail silently in background
+    // Fail silently
   }
 }
 
@@ -158,5 +242,3 @@ export async function getTrialStatus(): Promise<TrialStatus> {
     return { active: false, daysLeft: 0, hoursLeft: 0, expired: false, notStarted: true };
   }
 }
-
-
