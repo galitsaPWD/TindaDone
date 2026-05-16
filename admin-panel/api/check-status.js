@@ -16,15 +16,23 @@ export default async function handler(req, res) {
   };
 
   const { url: KV_URL, token: KV_TOKEN } = getKVEnv();
-  if (!KV_URL || !KV_TOKEN) return res.status(200).json({ revoked: false });
+  if (!KV_URL || !KV_TOKEN) return res.status(200).json({ revoked: false, activated: false });
 
   try {
-    const response = await fetch(`${KV_URL}/get/revoked:${deviceId}`, {
-      headers: { Authorization: `Bearer ${KV_TOKEN}` }
+    // Check both status keys
+    const [revokedRes, activatedRes] = await Promise.all([
+      fetch(`${KV_URL}/get/revoked:${deviceId}`, { headers: { Authorization: `Bearer ${KV_TOKEN}` } }),
+      fetch(`${KV_URL}/get/activated:${deviceId}`, { headers: { Authorization: `Bearer ${KV_TOKEN}` } })
+    ]);
+
+    const revokedData = await revokedRes.json();
+    const activatedData = await activatedRes.json();
+
+    return res.status(200).json({ 
+      revoked: revokedData.result === 'true',
+      activated: activatedData.result === 'true'
     });
-    const data = await response.json();
-    return res.status(200).json({ revoked: data.result === 'true' });
   } catch (error) {
-    return res.status(200).json({ revoked: false });
+    return res.status(200).json({ revoked: false, activated: false });
   }
 }
