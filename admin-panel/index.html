@@ -456,14 +456,22 @@
             }
             
             try {
-                // We use the new trial-start diagnostic if available
                 const res = await fetch(`${base}/api/trial-start?diag=true&password=${encodeURIComponent(pass)}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ deviceId: 'ping' })
                 });
+                
+                if (res.status === 401) {
+                    dot.style.background = 'orange';
+                    dot.style.boxShadow = 'none';
+                    txt.innerText = 'Auth Error';
+                    txt.style.color = 'orange';
+                    return;
+                }
+
                 const data = await res.json();
-                if (data.db_found === 'YES' || (config.url && config.token)) {
+                if (data.db_found === 'YES') {
                     dot.style.background = 'var(--accent)';
                     dot.style.boxShadow = '0 0 10px var(--accent)';
                     txt.innerText = 'Connected';
@@ -474,7 +482,7 @@
             } catch (e) {
                 dot.style.background = 'var(--danger)';
                 dot.style.boxShadow = 'none';
-                txt.innerText = 'Unlinked (Check Setup)';
+                txt.innerText = 'Disconnected';
                 txt.style.color = 'var(--danger)';
             }
         }
@@ -500,6 +508,10 @@
             // 2. Background Cloud Sync
             try {
                 const res = await fetch(`${getApiBase()}/api/history?password=${encodeURIComponent(pass)}`);
+                if (res.status === 401) {
+                    console.error('Cloud Sync Rejected: Invalid Password');
+                    return;
+                }
                 const data = await res.json();
                 
                 if (data.history && Array.isArray(data.history)) {
@@ -531,6 +543,10 @@
             // 2. Background Cloud Sync
             try {
                 const res = await fetch(`${getApiBase()}/api/trial-list?password=${encodeURIComponent(pass)}`);
+                if (res.status === 401) {
+                    console.error('Trial List Rejected: Invalid Password');
+                    return;
+                }
                 const data = await res.json();
                 
                 if (data.logs && Array.isArray(data.logs)) {
