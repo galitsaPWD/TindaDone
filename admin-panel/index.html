@@ -572,7 +572,7 @@
                 <tr>
                     <td>
                         <div style="font-weight:700;">${h.name || 'Anonymous'}</div>
-                        <div style="font-size:10px; color:var(--text-dim); margin-top:4px;">${h.date || 'Legacy'}</div>
+                        <div style="font-size:10px; color:var(--text-dim); margin-top:4px;">${formatLocalTime(h.date)}</div>
                     </td>
                     <td>
                         <div class="key-text">${h.key || h.code}</div>
@@ -594,10 +594,27 @@
             `).join('');
         }
 
+        function formatLocalTime(dateStr) {
+            if (!dateStr) return 'Recently';
+            try {
+                // Handle ISO strings or Timestamps
+                const d = new Date(dateStr);
+                if (isNaN(d.getTime())) return dateStr;
+                return d.toLocaleString('en-PH', { 
+                    hour: 'numeric', 
+                    minute: '2-digit', 
+                    second: '2-digit', 
+                    hour12: true 
+                });
+            } catch (e) {
+                return dateStr;
+            }
+        }
+
         function renderTrials() {
             const list = document.getElementById('trial-list');
             list.innerHTML = globalTrials.slice(0, 8).map(l => {
-                const date = !isNaN(parseInt(l.date)) ? new Date(parseInt(l.date)).toLocaleTimeString() : 'Recently';
+                const date = formatLocalTime(l.date);
                 return `
                 <div style="display:flex; justify-content:space-between; align-items:center; padding:12px; background:rgba(255,255,255,0.02); border-radius:12px; border-left: 2px solid var(--accent);">
                     <div>
