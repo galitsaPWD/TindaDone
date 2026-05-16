@@ -10,8 +10,22 @@ import {
   Dimensions,
   Platform
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { BlurView } from 'expo-blur';
+import Animated, { 
+  FadeIn, 
+  FadeOut, 
+  SlideInDown, 
+  Layout, 
+  FadeInDown,
+  useAnimatedStyle,
+  withSpring,
+  ZoomIn,
+  withTiming
+} from 'react-native-reanimated';
 import { 
   TrendingUp, 
+  TrendingDown,
   AlertTriangle, 
   History, 
   Wallet, 
@@ -29,7 +43,10 @@ import {
   FileText, 
   CheckCircle2,
   Package,
-  BarChart2
+  BarChart2,
+  Settings,
+  ChevronDown,
+  RefreshCw
 } from 'lucide-react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
@@ -37,17 +54,20 @@ import {
   getTransactions, 
   getProducts, 
   saveBusinessSettings,
-  getUtangRecords
+  getUtangRecords,
+  getExpenses,
+  DEFAULT_CATEGORIES
 } from '../../lib/storage';
 import { useSettings } from '../../context/SettingsContext';
 import { calculateTodaysSales, calculateTodaysProfit, getPaymentBreakdown } from '../../lib/calculations';
-import { Transaction, Product } from '../../lib/types';
+import { Transaction, Product, UtangRecord, Expense } from '../../lib/types';
 import { Theme } from '../../constants/Theme';
 
 const { width } = Dimensions.get('window');
 
 export default function StatsScreen() {
   const router = useRouter();
+  const { businessSettings, setIsSettingsOpen } = useSettings();
   const [allTransactions, setAllTransactions] = useState<Transaction[]>([]);
   const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [period, setPeriod] = useState<'daily' | 'monthly' | 'yearly'>('daily');
@@ -62,10 +82,25 @@ export default function StatsScreen() {
   const [lowStockItems, setLowStockItems] = useState<Product[]>([]);
   const [recentTransactions, setRecentTransactions] = useState<Transaction[]>([]);
   
-  const { businessSettings } = useSettings();
   const [totalInventoryValue, setTotalInventoryValue] = useState(0);
   const [totalDebt, setTotalDebt] = useState(0);
+  
+  const [todaysUtangIssued, setTodaysUtangIssued] = useState(0);
+  const [todaysUtangCollected, setTodaysUtangCollected] = useState(0);
+  const [todaysExpenses, setTodaysExpenses] = useState(0);
+  const [allUtangRecords, setAllUtangRecords] = useState<UtangRecord[]>([]);
+  const [historyFilter, setHistoryFilter] = useState<'all' | 'sales' | 'credit'>('all');
+
   const [showCloseout, setShowCloseout] = useState(false);
+  const [showGcash, setShowGcash] = useState(false);
+  const [showScrollHint, setShowScrollHint] = useState(true);
+
+  const cashCardStyle = useAnimatedStyle(() => {
+    return {
+      backgroundColor: withTiming(showGcash ? '#eff6ff' : '#FFFFFF', { duration: 300 })
+    };
+  });
+
 
   useFocusEffect(
     React.useCallback(() => {
@@ -77,9 +112,21 @@ export default function StatsScreen() {
     const transactions = await getTransactions();
     const products = await getProducts();
     const utang = await getUtangRecords();
+    const expenses = await getExpenses();
 
     setAllTransactions(transactions);
     setAllProducts(products);
+    setAllUtangRecords(utang);
+
+    const today = new Date().toISOString().split('T')[0];
+    const issuedToday = utang.filter(r => r.createdAt.startsWith(today)).reduce((s, r) => s + r.amount, 0);
+    const collectedToday = utang.filter(r => r.isPaid && r.paidAt?.startsWith(today)).reduce((s, r) => s + r.amount, 0);
+    
+    const todayExpenses = expenses.filter(e => e.timestamp.startsWith(today)).reduce((s, e) => s + e.amount, 0);
+    setTodaysExpenses(todayExpenses);
+
+    setTodaysUtangIssued(issuedToday);
+    setTodaysUtangCollected(collectedToday);
 
     setLowStockItems(products.filter(p => p.stock <= p.lowStockThreshold).slice(0, 5));
     setTotalInventoryValue(products.reduce((sum, p) => sum + (p.price * p.stock), 0));
@@ -103,6 +150,7 @@ export default function StatsScreen() {
     } else if (period === 'yearly') {
       filtered = allTransactions.filter(t => t.timestamp.startsWith(yearStr));
     }
+
     setPeriodTransactions(filtered);
 
     // --- Chart Data Calculation ---
@@ -165,22 +213,59 @@ export default function StatsScreen() {
     setTodaysProfit(calculateTodaysProfit(activeData, allProducts));
     setPaymentStats(getPaymentBreakdown(activeData));
     
-    const recent = [...activeData].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-    setRecentTransactions(recent.slice(0, 5));
-  }, [periodTransactions, chartData, selectedChartIndex, allProducts]);
+    // Combine regular sales with new debt records for history
+    const today = new Date().toISOString().split('T')[0];
+    const todayNewDebt = allUtangRecords
+      .filter(r => r.createdAt.startsWith(today))
+      .map(r => ({
+        id: r.id,
+        items: r.items || [],
+        total: r.amount,
+        paymentType: 'utang' as any,
+        timestamp: r.createdAt,
+        customerName: r.customerName
+      }));
+
+    const combined = [...activeData, ...todayNewDebt]
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    
+    // Apply History Filter
+    let filtered = combined;
+    if (historyFilter === 'sales') {
+      filtered = combined.filter(t => (t as any).paymentType !== 'utang');
+    } else if (historyFilter === 'credit') {
+      filtered = combined.filter(t => (t as any).paymentType === 'utang');
+    }
+
+    setRecentTransactions(filtered.slice(0, 5));
+  }, [periodTransactions, chartData, selectedChartIndex, allProducts, allUtangRecords, historyFilter]);
 
 
 
-  const getTransactionIcon = (t: Transaction) => {
+  const getTransactionIcon = (t: any) => {
+    if (t.paymentType === 'utang') return <AlertTriangle size={20} color={Theme.colors.tertiary} />;
     if (t.items.length === 0) return <Wallet size={20} color={Theme.colors.onSecondaryContainer} />;
     if (t.items.length > 2) return <ShoppingBasket size={24} color={Theme.colors.onSecondaryContainer} />;
-    if (t.items.some(i => i.productName.toLowerCase().includes('load'))) return <Smartphone size={24} color={Theme.colors.onSecondaryContainer} />;
+    if (t.items.some((i: any) => i.productName.toLowerCase().includes('load'))) return <Smartphone size={24} color={Theme.colors.onSecondaryContainer} />;
     return <ReceiptText size={20} color={Theme.colors.onSecondaryContainer} />;
   };
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container}>
+      <View style={styles.boutiqueHeader}>
+        <View>
+          <Text style={styles.boutiqueTitle}>Analytics</Text>
+          <Text style={styles.boutiqueSubtitle}>Performance Overview</Text>
+        </View>
+        <TouchableOpacity 
+          style={styles.settingsHeaderBtn} 
+          onPress={() => setIsSettingsOpen(true)}
+        >
+          <Settings size={22} color={Theme.colors.primary} />
+        </TouchableOpacity>
+      </View>
       <ScrollView contentContainerStyle={[styles.content, { paddingBottom: 110 }]}>
+
         {/* Period Selector Tabs */}
         <View style={styles.periodTabs}>
           {['daily', 'monthly', 'yearly'].map((p) => (
@@ -188,6 +273,7 @@ export default function StatsScreen() {
               key={p} 
               style={[styles.periodTab, period === p && styles.periodTabActive]}
               onPress={() => setPeriod(p as any)}
+              activeOpacity={0.7}
             >
               <Text style={[styles.periodTabText, period === p && styles.periodTabTextActive]}>
                 {p.charAt(0).toUpperCase() + p.slice(1)}
@@ -197,72 +283,100 @@ export default function StatsScreen() {
         </View>
 
         {/* Revenue Hero */}
-        <View style={styles.heroSection}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <Animated.View layout={Layout.springify()} style={styles.heroSection}>
+          <View style={styles.heroHeader}>
             <View>
-              <Text style={styles.heroLabel}>
+              <Animated.Text key={`${period}-${selectedChartIndex}`} entering={FadeInDown.duration(400)} style={styles.heroLabel}>
                 {selectedChartIndex !== null ? chartData[selectedChartIndex].label.toUpperCase() : period.toUpperCase()} REVENUE
-              </Text>
-              <Text style={styles.heroValue}>₱{todaysSales.toLocaleString()}</Text>
-              <View style={styles.profitBadge}>
-                <TrendingUp size={14} color={Theme.colors.onPrimaryContainer} style={{ marginRight: 6 }} />
+              </Animated.Text>
+              <Animated.Text key={`val-${todaysSales}`} entering={FadeIn.duration(500)} style={styles.heroValue}>₱{todaysSales.toLocaleString()}</Animated.Text>
+              <Animated.View key={`profit-${todaysProfit}`} entering={FadeInDown.delay(100)} style={styles.profitBadge}>
+                <TrendingUp size={16} color="#FFF" />
                 <Text style={styles.profitText}>Est. Profit: ₱{todaysProfit.toLocaleString()}</Text>
-              </View>
+              </Animated.View>
             </View>
             <TouchableOpacity onPress={() => setShowChart(!showChart)} style={styles.chartToggleBtn}>
-              <BarChart2 size={24} color={Theme.colors.onPrimaryContainer} opacity={showChart ? 1 : 0.5} />
+              <BarChart2 size={24} color="#FFF" opacity={showChart ? 1 : 0.6} />
             </TouchableOpacity>
           </View>
 
-          {/* Dynamic Micro-Chart */}
           {showChart && (
-            <View style={styles.chartContainer}>
+            <Animated.View 
+              layout={Layout.springify()} 
+              entering={FadeIn.duration(400)}
+              exiting={FadeOut.duration(300)}
+              style={styles.chartContainer}
+            >
               {chartData.map((d, i) => {
                 const isActive = selectedChartIndex === null || selectedChartIndex === i;
                 return (
                   <TouchableOpacity 
-                    key={i} 
+                    key={`${period}-${i}`} 
                     style={[styles.chartBarCol, { opacity: isActive ? 1 : 0.4 }]}
                     onPress={() => setSelectedChartIndex(selectedChartIndex === i ? null : i)}
                   >
                     <View style={styles.chartBarTrack}>
-                      <View style={[styles.chartBarFill, { height: `${d.height}%` }]} />
+                      <Animated.View 
+                        entering={ZoomIn.delay(i * 50).springify()}
+                        style={[styles.chartBarFill, { height: `${d.height}%` }]} 
+                      />
                     </View>
                     <Text style={[styles.chartLabel, isActive && styles.chartLabelActive]} numberOfLines={1}>{d.label}</Text>
                   </TouchableOpacity>
                 );
               })}
-            </View>
+            </Animated.View>
           )}
-        </View>
+        </Animated.View>
 
         {/* Quick Summaries Bento */}
         <View style={styles.actionGrid}>
-          <TouchableOpacity style={[styles.actionCard, { backgroundColor: '#defbe6' }]} onPress={() => setShowCloseout(true)}>
-            <FileText size={24} color="#0a643b" />
-            <Text style={[styles.actionLabel, { color: '#0a643b' }]}>Daily Report</Text>
+          <TouchableOpacity style={styles.actionCard} onPress={() => setShowCloseout(true)}>
+            <View style={[styles.actionIcon, { backgroundColor: '#defbe6' }]}>
+              <FileText size={20} color="#0a643b" />
+            </View>
+            <Text style={styles.actionLabel}>Daily Report</Text>
           </TouchableOpacity>
-          <View style={[styles.actionCard, { backgroundColor: '#fef3c7' }]}>
-            <Package size={24} color="#92400e" />
-            <Text style={[styles.actionLabel, { color: '#92400e' }]}>₱{totalInventoryValue.toLocaleString()}</Text>
+          <View style={styles.actionCard}>
+            <View style={[styles.actionIcon, { backgroundColor: '#fef3c7' }]}>
+              <Package size={20} color="#92400e" />
+            </View>
+            <Text style={styles.actionLabel}>₱{totalInventoryValue.toLocaleString()}</Text>
             <Text style={styles.actionSubLabel}>Inv. Value</Text>
           </View>
-          <View style={[styles.actionCard, { backgroundColor: '#fee2e2' }]}>
-            <Wallet size={24} color="#b91c1c" />
-            <Text style={[styles.actionLabel, { color: '#b91c1c' }]}>₱{totalDebt.toLocaleString()}</Text>
+          <View style={styles.actionCard}>
+            <View style={[styles.actionIcon, { backgroundColor: '#fee2e2' }]}>
+              <Wallet size={20} color="#b91c1c" />
+            </View>
+            <Text style={styles.actionLabel}>₱{totalDebt.toLocaleString()}</Text>
             <Text style={styles.actionSubLabel}>Total Debt</Text>
           </View>
         </View>
 
         <View style={styles.bentoGrid}>
-          <View style={styles.bentoCard}>
-            <Text style={styles.bentoLabel}>Cash Sales</Text>
-            <Text style={styles.bentoValue}>₱{paymentStats.cash.toLocaleString()}</Text>
+          <Animated.View style={[styles.bentoCard, cashCardStyle]}>
+            <View style={styles.bentoHeader}>
+              <Text style={[styles.bentoLabel]}>{showGcash ? 'GCash Sales' : 'Cash Sales'}</Text>
+              <TouchableOpacity
+                style={[styles.bentoToggle, showGcash && styles.bentoToggleActive]}
+                onPress={() => setShowGcash(!showGcash)}
+                activeOpacity={0.7}
+              >
+                <RefreshCw size={12} color={showGcash ? '#FFF' : Theme.colors.outline} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.bentoValue}>₱{(showGcash ? paymentStats.gcash : paymentStats.cash).toLocaleString()}</Text>
+          </Animated.View>
+          <View style={[styles.bentoCard, { backgroundColor: (todaysProfit - todaysExpenses) >= 0 ? '#f0fdf4' : '#fdf2f2' }]}>
+            <View style={styles.bentoHeader}>
+              <Text style={styles.bentoLabel}>Net Profit</Text>
+              <Info size={14} color={(todaysProfit - todaysExpenses) >= 0 ? '#16a34a' : Theme.colors.tertiary} />
+            </View>
+            <Text style={[styles.bentoValue, { color: (todaysProfit - todaysExpenses) >= 0 ? '#16a34a' : Theme.colors.tertiary }]}>
+              ₱{(todaysProfit - todaysExpenses).toLocaleString()}
+            </Text>
           </View>
-          <View style={[styles.bentoCard, { backgroundColor: Theme.colors.secondaryContainer + '40' }]}>
-            <Text style={styles.bentoLabel}>GCash Sales</Text>
-            <Text style={styles.bentoValue}>₱{paymentStats.gcash.toLocaleString()}</Text>
-          </View>
+
         </View>
 
         {lowStockItems.length > 0 && (
@@ -299,10 +413,31 @@ export default function StatsScreen() {
           <View style={styles.sectionHeader}>
             <View style={styles.sectionTitleRow}>
               <History size={20} color={Theme.colors.onSurface} />
-              <Text style={styles.sectionTitle}>{period.charAt(0).toUpperCase() + period.slice(1)} Sales</Text>
+              <Text style={styles.sectionTitle}>Daily Activity</Text>
             </View>
             <TouchableOpacity onPress={() => router.push('/sales-history')}>
-              <Text style={styles.viewAllText}>History</Text>
+              <Text style={styles.viewAllText}>Full History</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.historySwitcher}>
+            <TouchableOpacity 
+              style={[styles.historyTab, historyFilter === 'all' && styles.historyTabActive]}
+              onPress={() => setHistoryFilter('all')}
+            >
+              <Text style={[styles.historyTabText, historyFilter === 'all' && styles.historyTabTextActive]}>All</Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={[styles.historyTab, historyFilter === 'sales' && styles.historyTabActive]}
+              onPress={() => setHistoryFilter('sales')}
+            >
+              <Text style={[styles.historyTabText, historyFilter === 'sales' && styles.historyTabTextActive]}>Sales</Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={[styles.historyTab, historyFilter === 'credit' && styles.historyTabActive]}
+              onPress={() => setHistoryFilter('credit')}
+            >
+              <Text style={[styles.historyTabText, historyFilter === 'credit' && styles.historyTabTextActive]}>Credit</Text>
             </TouchableOpacity>
           </View>
           
@@ -319,9 +454,11 @@ export default function StatsScreen() {
                   <View style={styles.transactionIcon}>{getTransactionIcon(t)}</View>
                   <View style={styles.transactionInfo}>
                     <Text style={styles.transactionTitle} numberOfLines={1}>
-                      {t.items.length === 0 
-                        ? 'Debt Settlement' 
-                        : (t.items.length > 1 ? `${t.items[0].productName} +${t.items.length - 1}` : t.items[0].productName)
+                      {(t as any).paymentType === 'utang' 
+                        ? `Utang: ${(t as any).customerName}`
+                        : (t.items.length === 0 
+                          ? 'Debt Settlement' 
+                          : (t.items.length > 1 ? `${t.items[0].productName} +${t.items.length - 1}` : t.items[0].productName))
                       }
                     </Text>
                     <Text style={styles.transactionMeta}>
@@ -337,9 +474,18 @@ export default function StatsScreen() {
       </ScrollView>
 
       {/* Daily Closeout Modal */}
-      <Modal visible={showCloseout} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
+      <Modal visible={showCloseout} transparent animationType="slide" onShow={() => setShowScrollHint(true)}>
+        <BlurView intensity={100} tint="light" style={styles.modalOverlay}>
           <View style={styles.summaryCard}>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              onScroll={(e) => {
+                const { layoutMeasurement, contentOffset, contentSize } = e.nativeEvent;
+                const isNearBottom = layoutMeasurement.height + contentOffset.y >= contentSize.height - 30;
+                setShowScrollHint(!isNearBottom);
+              }}
+              scrollEventThrottle={16}
+            >
             <View style={styles.summaryHeader}>
               <Store size={40} color={Theme.colors.primary} style={{ marginBottom: 12 }} />
               <Text style={styles.summaryTitle}>{businessSettings.storeName || 'TindaDone'}</Text>
@@ -369,7 +515,7 @@ export default function StatsScreen() {
                   <ShoppingBasket size={18} color={Theme.colors.onSurfaceVariant} />
                   <Text style={styles.summaryItemLabel}>Sales Count</Text>
                 </View>
-                <Text style={styles.summaryItemValue}>{recentTransactions.length} transactions</Text>
+                <Text style={styles.summaryItemValue}>{recentTransactions.length} sales</Text>
               </View>
               
               <View style={styles.divider} />
@@ -389,7 +535,55 @@ export default function StatsScreen() {
                 </View>
                 <Text style={styles.summaryItemValue}>₱{paymentStats.gcash.toLocaleString()}</Text>
               </View>
+
+              <View style={styles.divider} />
+
+              <View style={styles.summaryRow}>
+                <View style={styles.summaryRowLabelGroup}>
+                  <AlertTriangle size={18} color={Theme.colors.tertiary} />
+                  <Text style={styles.summaryItemLabel}>Debt Issued (Utang)</Text>
+                </View>
+                <Text style={[styles.summaryItemValue, { color: Theme.colors.tertiary }]}>+₱{todaysUtangIssued.toLocaleString()}</Text>
+              </View>
+
+              <View style={styles.summaryRow}>
+                <View style={styles.summaryRowLabelGroup}>
+                  <CheckCircle2 size={18} color="#0a643b" />
+                  <Text style={styles.summaryItemLabel}>Debt Collected</Text>
+                </View>
+                <Text style={[styles.summaryItemValue, { color: '#0a643b' }]}>-₱{todaysUtangCollected.toLocaleString()}</Text>
+              </View>
+
+              <View style={styles.divider} />
+
+              <View style={styles.summaryRow}>
+                <View style={styles.summaryRowLabelGroup}>
+                  <TrendingDown size={18} color={Theme.colors.tertiary} />
+                  <Text style={styles.summaryItemLabel}>Daily Costs</Text>
+                </View>
+                <Text style={[styles.summaryItemValue, { color: Theme.colors.tertiary }]}>
+                  - ₱{todaysExpenses.toLocaleString()}
+                </Text>
+              </View>
+
+              <View style={[styles.summaryRow, { backgroundColor: Theme.colors.primaryContainer + '20', borderRadius: 20, paddingHorizontal: 16, marginTop: 8 }]}>
+                <Text style={[styles.summaryItemLabel, { fontFamily: Theme.typography.headlineBlack }]}>Net Performance</Text>
+                <Text style={[styles.summaryItemValue, { fontSize: 22, color: Theme.colors.primary }]}>
+                  ₱{(todaysProfit - todaysExpenses).toLocaleString()}
+                </Text>
+              </View>
             </View>
+            <View style={{ height: 20 }} />
+          </ScrollView>
+            
+            {showScrollHint && (
+              <Animated.View entering={FadeIn.duration(200)} exiting={FadeOut.duration(200)} style={styles.scrollHintContainer}>
+                <View style={styles.scrollHint}>
+                  <ChevronDown size={14} color={Theme.colors.outline} />
+                  <Text style={styles.scrollHintText}>Scroll for more</Text>
+                </View>
+              </Animated.View>
+            )}
 
             <View style={styles.summaryFooter}>
               <TouchableOpacity style={styles.shareBtn} onPress={() => setShowCloseout(false)}>
@@ -398,23 +592,50 @@ export default function StatsScreen() {
               </TouchableOpacity>
               <Text style={styles.shareHint}>Take a screenshot to save this report</Text>
             </View>
-          </View>
-        </View>
+            </View>
+        </BlurView>
       </Modal>
 
 
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  boutiqueHeader: {
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 8,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  settingsHeaderBtn: {
+    padding: 8,
+    backgroundColor: Theme.colors.surfaceContainerHigh,
+    borderRadius: 16,
+  },
+  boutiqueTitle: {
+    fontFamily: Theme.typography.headlineBlack,
+    fontSize: 34,
+    color: Theme.colors.onSurface,
+    letterSpacing: -1.5,
+  },
+  boutiqueSubtitle: {
+    fontFamily: Theme.typography.bodyBold,
+    fontSize: 12,
+    color: Theme.colors.primary,
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+    opacity: 0.8,
+  },
   container: {
     flex: 1,
     backgroundColor: Theme.colors.background,
   },
   content: {
-    padding: 24,
-    paddingBottom: 120,
+    padding: 16,
+    paddingBottom: 160,
   },
   periodTabs: {
     flexDirection: 'row',
@@ -448,13 +669,14 @@ const styles = StyleSheet.create({
   },
   heroSection: {
     marginBottom: 24,
-    backgroundColor: Theme.colors.primaryContainer,
+    backgroundColor: Theme.colors.primary,
     borderRadius: 32,
     padding: 24,
   },
   heroLabel: {
     fontFamily: Theme.typography.bodyMedium,
-    color: Theme.colors.onPrimaryContainer,
+    color: '#FFF',
+    opacity: 0.8,
     fontSize: 12,
     letterSpacing: 2,
     marginBottom: 4,
@@ -462,7 +684,7 @@ const styles = StyleSheet.create({
   heroValue: {
     fontFamily: Theme.typography.headlineBlack,
     fontSize: 48,
-    color: Theme.colors.onPrimaryContainer,
+    color: '#FFF',
   },
   profitBadge: {
     flexDirection: 'row',
@@ -476,7 +698,7 @@ const styles = StyleSheet.create({
   },
   profitText: {
     fontFamily: Theme.typography.bodyBold,
-    color: Theme.colors.onPrimaryContainer,
+    color: '#FFF',
     fontSize: 13,
   },
   chartContainer: {
@@ -517,7 +739,7 @@ const styles = StyleSheet.create({
   chartToggleBtn: {
     padding: 8,
     backgroundColor: 'rgba(255,255,255,0.15)',
-    borderRadius: 12,
+    borderRadius: 16,
   },
   actionGrid: {
     flexDirection: 'row',
@@ -526,16 +748,25 @@ const styles = StyleSheet.create({
   },
   actionCard: {
     flex: 1,
-    borderRadius: 20,
+    borderRadius: 32,
     padding: 16,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.5)',
+    backgroundColor: '#FFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 2,
   },
   actionLabel: {
     fontFamily: Theme.typography.headlineBlack,
-    fontSize: 14,
+    fontSize: 13,
     textAlign: 'center',
+    color: Theme.colors.onSurface,
   },
   actionSubLabel: {
     fontFamily: Theme.typography.bodyMedium,
@@ -551,21 +782,49 @@ const styles = StyleSheet.create({
   bentoCard: {
     flex: 1,
     backgroundColor: Theme.colors.surfaceContainerLowest,
-    borderRadius: 24,
-    padding: 16,
+    borderRadius: 32,
+    padding: 20,
     borderWidth: 1,
-    borderColor: Theme.colors.outlineVariant + '20',
+    borderColor: Theme.colors.outlineVariant,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 2,
+  },
+  bentoHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
   },
   bentoLabel: {
-    fontFamily: Theme.typography.bodyMedium,
+    fontFamily: Theme.typography.bodyBold,
     fontSize: 11,
     color: Theme.colors.outline,
-    marginBottom: 4,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    marginBottom: 8,
   },
   bentoValue: {
     fontFamily: Theme.typography.headlineBlack,
-    fontSize: 20,
+    fontSize: 22,
     color: Theme.colors.onSurface,
+    letterSpacing: -0.5,
+  },
+  bentoToggle: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: Theme.colors.surfaceVariant,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: Theme.colors.outlineVariant,
+  },
+  bentoToggleActive: {
+    backgroundColor: '#2563eb',
+    borderColor: '#2563eb',
   },
   section: {
     marginBottom: 32,
@@ -579,48 +838,86 @@ const styles = StyleSheet.create({
   sectionTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 10,
   },
   sectionTitle: {
-    fontFamily: Theme.typography.headline,
+    fontFamily: Theme.typography.headlineBlack,
     fontSize: 20,
     color: Theme.colors.onSurface,
   },
   viewAllText: {
-    fontFamily: Theme.typography.bodySemiBold,
+    fontFamily: Theme.typography.bodyBold,
     color: Theme.colors.primary,
     fontSize: 14,
   },
+  historySwitcher: {
+    flexDirection: 'row',
+    backgroundColor: Theme.colors.surfaceContainerLow,
+    borderRadius: 24,
+    padding: 4,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: Theme.colors.outlineVariant + '40',
+  },
+  historyTab: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+    borderRadius: 20,
+  },
+  historyTabActive: {
+    backgroundColor: Theme.colors.primary,
+    shadowColor: Theme.colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  historyTabText: {
+    fontFamily: Theme.typography.bodyBold,
+    fontSize: 13,
+    color: Theme.colors.onSurfaceVariant,
+  },
+  historyTabTextActive: {
+    color: '#FFF',
+  },
   alertsGrid: {
-    gap: 10,
+    gap: 12,
   },
   alertCard: {
     backgroundColor: Theme.colors.surfaceContainerLowest,
-    borderRadius: 20,
+    borderRadius: 32,
     padding: 16,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    borderLeftWidth: 4,
-    borderLeftColor: Theme.colors.tertiary,
+    borderWidth: 1,
+    borderColor: Theme.colors.outlineVariant,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.03,
+    shadowRadius: 5,
+    elevation: 1,
   },
   alertInfo: {
     flex: 1,
   },
   alertName: {
-    fontFamily: Theme.typography.headline,
+    fontFamily: Theme.typography.bodyBold,
     fontSize: 16,
+    color: Theme.colors.onSurface,
   },
   alertStatus: {
-    fontFamily: Theme.typography.bodyMedium,
+    fontFamily: Theme.typography.bodySemiBold,
     color: Theme.colors.tertiary,
     fontSize: 13,
+    marginTop: 2,
   },
   restockButton: {
-    backgroundColor: Theme.colors.surfaceContainerHighest,
+    backgroundColor: Theme.colors.surfaceContainerLow,
     paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 12,
+    paddingVertical: 10,
+    borderRadius: 16,
   },
   restockButtonText: {
     fontFamily: Theme.typography.bodyBold,
@@ -629,59 +926,73 @@ const styles = StyleSheet.create({
   },
   ledgerCard: {
     backgroundColor: Theme.colors.surfaceContainerLowest,
-    borderRadius: 24,
+    borderRadius: 32,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: Theme.colors.outlineVariant + '20',
+    borderColor: Theme.colors.outlineVariant,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.05,
+    shadowRadius: 20,
+    elevation: 4,
   },
   transactionItem: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: 16,
     borderBottomWidth: 1,
-    borderBottomColor: Theme.colors.outlineVariant + '20',
+    borderBottomColor: Theme.colors.outlineVariant + '40',
   },
   transactionIcon: {
-    width: 44,
-    height: 44,
+    width: 48,
+    height: 48,
     backgroundColor: Theme.colors.secondaryContainer,
-    borderRadius: 12,
+    borderRadius: 20,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 12,
+    marginRight: 16,
   },
   transactionInfo: {
     flex: 1,
   },
   transactionTitle: {
-    fontFamily: Theme.typography.headline,
+    fontFamily: Theme.typography.bodyBold,
     fontSize: 15,
+    color: Theme.colors.onSurface,
   },
   transactionMeta: {
     fontFamily: Theme.typography.bodyMedium,
     fontSize: 12,
-    color: Theme.colors.onSurfaceVariant,
+    color: Theme.colors.outline,
+    marginTop: 2,
   },
   transactionAmount: {
     fontFamily: Theme.typography.headlineBlack,
-    fontSize: 16,
+    fontSize: 18,
+    color: Theme.colors.onSurface,
+    letterSpacing: -0.5,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'transparent',
     justifyContent: 'center',
     padding: 24,
   },
   summaryCard: {
-    backgroundColor: '#FFF',
+    backgroundColor: '#FFFFFF',
     borderRadius: 32,
     padding: 32,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 20 },
+    shadowOpacity: 0.2,
+    shadowRadius: 30,
+    elevation: 12,
+    maxHeight: '90%',
   },
   summaryHeader: {
     alignItems: 'center',
     marginBottom: 32,
     borderBottomWidth: 1,
-    borderBottomColor: Theme.colors.outlineVariant + '20',
+    borderBottomColor: Theme.colors.outlineVariant,
     paddingBottom: 24,
   },
   summaryTitle: {
@@ -691,7 +1002,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   summarySubtitle: {
-    fontFamily: Theme.typography.bodySemiBold,
+    fontFamily: Theme.typography.bodyBold,
     fontSize: 12,
     color: Theme.colors.primary,
     letterSpacing: 2,
@@ -732,7 +1043,7 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: Theme.colors.outlineVariant,
     marginVertical: 16,
-    opacity: 0.2,
+    opacity: 0.5,
   },
   summaryFooter: {
     marginTop: 32,
@@ -746,6 +1057,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
+    shadowColor: Theme.colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
   },
   shareBtnText: {
     fontFamily: Theme.typography.bodyBold,
@@ -757,6 +1073,14 @@ const styles = StyleSheet.create({
     color: Theme.colors.outline,
     fontSize: 12,
     marginTop: 16,
+  },
+  actionIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 4,
   },
   // Settings
   settingsCard: {
@@ -824,5 +1148,75 @@ const styles = StyleSheet.create({
   emptyRecentText: {
     fontFamily: Theme.typography.bodyMedium,
     color: Theme.colors.outline,
+  },
+  heroHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 8,
+  },
+  categoriesSection: {
+    backgroundColor: Theme.colors.surface,
+    paddingVertical: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: Theme.colors.surfaceVariant,
+  },
+  categoriesContent: {
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+  },
+  catFilterChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: Theme.colors.surfaceVariant + '40',
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: Theme.colors.surfaceVariant,
+  },
+  catFilterChipActive: {
+    backgroundColor: Theme.colors.primary,
+    borderColor: Theme.colors.primary,
+  },
+  catFilterChipText: {
+    fontFamily: Theme.typography.bodyMedium,
+    fontSize: 13,
+    color: Theme.colors.onSurfaceVariant,
+  },
+  catFilterChipTextActive: {
+    color: Theme.colors.onPrimary,
+    fontFamily: Theme.typography.bodyBold,
+  },
+  scrollHintContainer: {
+    position: 'absolute',
+    bottom: 120,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    zIndex: 10,
+    pointerEvents: 'none',
+  },
+  scrollHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFF',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Theme.colors.outlineVariant,
+    gap: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
+    elevation: 2,
+  },
+  scrollHintText: {
+    fontFamily: Theme.typography.bodyBold,
+    fontSize: 10,
+    color: Theme.colors.outline,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
 });

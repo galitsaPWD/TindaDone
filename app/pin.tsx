@@ -119,44 +119,60 @@ export default function PinScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Logo area */}
-      <View style={styles.logoArea}>
-        <View style={styles.logoCircle}>
+      {/* Brand Header */}
+      <View style={styles.brandArea}>
+        <View style={styles.logoPill}>
           <Text style={styles.logoText}>TD</Text>
         </View>
         <Text style={styles.appName}>TindaDone</Text>
       </View>
 
-      {/* Title */}
-      <Text style={styles.title}>{titleText}</Text>
-      <Text style={styles.subtitle}>{subtitleText}</Text>
+      {/* Messaging */}
+      <View style={styles.textGroup}>
+        <Text style={styles.title}>{titleText}</Text>
+        <Text style={styles.subtitle}>{subtitleText}</Text>
+      </View>
 
-      {/* Dots */}
+      {/* PIN Indicators */}
       <Animated.View style={[styles.dotsRow, { transform: [{ translateX: shakeAnim }] }]}>
         {[0,1,2,3].map(i => (
           <View
             key={i}
-            style={[styles.dot, i < currentLength && styles.dotFilled]}
-          />
+            style={[styles.dot, i < currentLength && styles.dotActive]}
+          >
+            {i < currentLength && <View style={styles.dotInner} />}
+          </View>
         ))}
       </Animated.View>
 
-      {/* Error */}
-      {error ? <Text style={styles.errorText}>{error}</Text> : <Text style={styles.errorText} />}
+      {/* Error Feedback */}
+      <View style={styles.errorBox}>
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
+      </View>
 
-      {/* Keypad */}
+      {/* Keypad Layout */}
       <View style={styles.keypad}>
         {KEYS.map((row, ri) => (
           <View key={ri} style={styles.keyRow}>
             {row.map((k, ki) => {
               if (k === '') return <View key={ki} style={styles.keyPlaceholder} />;
               if (k === 'del') return (
-                <TouchableOpacity key={ki} style={styles.keyBtn} onPress={handleDelete}>
-                  <Delete size={22} color={Theme.colors.onSurfaceVariant} />
+                <TouchableOpacity 
+                  key={ki} 
+                  style={[styles.keyBtn, styles.deleteBtn]} 
+                  onPress={handleDelete}
+                  activeOpacity={0.6}
+                >
+                  <Delete size={24} color={Theme.colors.onSurface} strokeWidth={2} />
                 </TouchableOpacity>
               );
               return (
-                <TouchableOpacity key={ki} style={styles.keyBtn} onPress={() => handleDigit(k)}>
+                <TouchableOpacity 
+                  key={ki} 
+                  style={styles.keyBtn} 
+                  onPress={() => handleDigit(k)}
+                  activeOpacity={0.7}
+                >
                   <Text style={styles.keyText}>{k}</Text>
                 </TouchableOpacity>
               );
@@ -173,88 +189,123 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Theme.colors.background,
     alignItems: 'center',
-    justifyContent: 'center',
+    paddingTop: '15%',
     paddingBottom: 40,
   },
-  logoArea: {
+  brandArea: {
     alignItems: 'center',
-    marginBottom: 40,
+    marginBottom: 48,
   },
-  logoCircle: {
-    width: 72,
-    height: 72,
-    borderRadius: 20,
+  logoPill: {
+    width: 64,
+    height: 64,
+    borderRadius: 22,
     backgroundColor: Theme.colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 16,
+    shadowColor: Theme.colors.primary,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 15,
+    elevation: 8,
   },
   logoText: {
     color: '#FFF',
-    fontSize: 28,
+    fontSize: 24,
     fontFamily: Theme.typography.headlineBlack,
   },
   appName: {
     fontFamily: Theme.typography.headlineBlack,
-    fontSize: 22,
+    fontSize: 20,
     color: Theme.colors.onSurface,
+    letterSpacing: 0.5,
+  },
+  textGroup: {
+    alignItems: 'center',
+    marginBottom: 40,
   },
   title: {
     fontFamily: Theme.typography.headlineBlack,
-    fontSize: 24,
+    fontSize: 28,
     color: Theme.colors.onSurface,
     marginBottom: 8,
+    letterSpacing: -1,
   },
   subtitle: {
-    fontFamily: Theme.typography.body,
+    fontFamily: Theme.typography.bodySemiBold,
     fontSize: 14,
-    color: Theme.colors.onSurfaceVariant,
-    marginBottom: 36,
+    color: Theme.colors.outline,
+    textAlign: 'center',
+    paddingHorizontal: 40,
   },
   dotsRow: {
     flexDirection: 'row',
-    gap: 20,
-    marginBottom: 12,
+    gap: 24,
+    marginBottom: 24,
   },
   dot: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
     borderWidth: 2,
-    borderColor: Theme.colors.primary,
+    borderColor: Theme.colors.outlineVariant,
     backgroundColor: 'transparent',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  dotFilled: {
+  dotActive: {
+    borderColor: Theme.colors.primary,
+  },
+  dotInner: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
     backgroundColor: Theme.colors.primary,
+  },
+  errorBox: {
+    height: 24,
+    marginBottom: 32,
   },
   errorText: {
     fontFamily: Theme.typography.bodyBold,
     fontSize: 13,
     color: Theme.colors.tertiary,
-    marginBottom: 24,
-    height: 18,
   },
   keypad: {
-    gap: 12,
+    gap: 20,
   },
   keyRow: {
     flexDirection: 'row',
-    gap: 24,
+    gap: 32,
   },
   keyBtn: {
     width: 72,
     height: 72,
     borderRadius: 36,
-    backgroundColor: Theme.colors.surfaceContainerLow,
+    backgroundColor: Theme.colors.surfaceContainerLowest,
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: Theme.colors.outlineVariant,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
+    elevation: 2,
+  },
+  deleteBtn: {
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+    elevation: 0,
+    shadowOpacity: 0,
   },
   keyPlaceholder: {
     width: 72,
     height: 72,
   },
   keyText: {
-    fontSize: 26,
+    fontSize: 28,
     fontFamily: Theme.typography.headlineBlack,
     color: Theme.colors.onSurface,
   },

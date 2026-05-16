@@ -1,55 +1,73 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
+  StyleSheet, 
   View, 
   Text, 
-  StyleSheet, 
-  FlatList, 
   TouchableOpacity, 
-  Modal, 
+  FlatList, 
   TextInput, 
-  Alert,
-  Image,
-  ScrollView,
-  } from 'react-native';
+  ScrollView, 
+  Modal, 
+  Dimensions, 
+  Image 
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { BlurView } from 'expo-blur';
 import { 
-  Plus, 
   User, 
+  MapPin, 
+  Search, 
+  Plus, 
+  X, 
+  Contact, 
   CheckCircle2, 
   Trash2, 
-  X, 
-  Contact,
   CreditCard,
-  Search,
   AlertTriangle,
-  Info
+  Info,
+  Settings
 } from 'lucide-react-native';
-import { useRouter, useFocusEffect } from 'expo-router';
-import { getUtangRecords, addUtangRecord, updateUtangRecord, markUtangPaid, deleteUtangRecord, getProducts } from '../../lib/storage';
-import { useSettings } from '../../context/SettingsContext';
-import { UtangRecord, Product, TransactionItem } from '../../lib/types';
 import { Theme } from '../../constants/Theme';
-import { Dimensions } from 'react-native';
+import { useTintin } from '../../context/TintinContext';
+import { 
+  getUtangRecords, 
+  addUtangRecord, 
+  updateUtangRecord, 
+  deleteUtangRecord, 
+  markUtangPaid,
+  getProducts
+} from '../../lib/storage';
+import { UtangRecord, Product, TransactionItem } from '../../lib/types';
+import { useSettings } from '../../context/SettingsContext';
 
 const { width } = Dimensions.get('window');
 
 export default function UtangScreen() {
+  const { businessSettings, setIsSettingsOpen } = useSettings();
+  const tintin = useTintin();
   const [records, setRecords] = useState<UtangRecord[]>([]);
-  const [filteredRecords, setFilteredRecords] = useState<UtangRecord[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
+  const [totalOwed, setTotalOwed] = useState(0);
   const [search, setSearch] = useState('');
-  
-  // Modals
   const [modalVisible, setModalVisible] = useState(false);
   const [pickerVisible, setPickerVisible] = useState(false);
+  const [paymentModalVisible, setPaymentModalVisible] = useState(false);
   
-  // New Record State
+  // Form State
+  const [editingRecord, setEditingRecord] = useState<UtangRecord | null>(null);
   const [customerName, setCustomerName] = useState('');
-  const [selectedItems, setSelectedItems] = useState<TransactionItem[]>([]);
+  const [location, setLocation] = useState('');
   const [manualAmount, setManualAmount] = useState('');
   const [note, setNote] = useState('');
+  const [selectedItems, setSelectedItems] = useState<TransactionItem[]>([]);
+  
+  const [products, setProducts] = useState<Product[]>([]);
   const [showErrors, setShowErrors] = useState(false);
-  const [editingRecord, setEditingRecord] = useState<UtangRecord | null>(null);
+  // Filter State
+  const [selectedLocation, setSelectedLocation] = useState<string | null>(null);
+
+  // Payment State
+  const [payingRecord, setPayingRecord] = useState<UtangRecord | null>(null);
+  const [paymentStep, setPaymentStep] = useState<'choose' | 'confirm_gcash'>('choose');
 
   // Custom Alert State
   const [alertVisible, setAlertVisible] = useState(false);
@@ -60,37 +78,39 @@ export default function UtangScreen() {
     onConfirm?: () => void;
   }>({ title: '', message: '', type: 'info' });
 
-  const showAlert = (title: string, message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info', onConfirm?: () => void) => {
+  const showAlert = (title: string, message: string, type: 'success' | 'error' | 'warning' | 'info', onConfirm?: () => void) => {
     setAlertConfig({ title, message, type, onConfirm });
     setAlertVisible(true);
   };
 
-  // Payment Selection
-  const [paymentModalVisible, setPaymentModalVisible] = useState(false);
-  const [payingRecord, setPayingRecord] = useState<UtangRecord | null>(null);
-  const [paymentStep, setPaymentStep] = useState<'choose' | 'confirm_gcash'>('choose');
-  const { businessSettings, updateSettings } = useSettings();
-
-  // Stats
-  const [totalOwed, setTotalOwed] = useState(0);
-
-  useFocusEffect(
-    useCallback(() => {
-      loadRecords();
-      loadProducts();
-    }, [])
-  );
-
   useEffect(() => {
-    if (!search) {
-      setFilteredRecords(records);
-    } else {
-      setFilteredRecords(records.filter(r => 
-        r.customerName.toLowerCase().includes(search.toLowerCase()) ||
-        r.note?.toLowerCase().includes(search.toLowerCase())
-      ));
+    loadRecords();
+    loadProducts();
+  }, []);
+
+  const locations = useMemo(() => {
+    const locs = records.map(r => r.location).filter((l): l is string => !!l);
+    return Array.from(new Set(locs));
+  }, [records]);
+
+  const filteredRecords = useMemo(() => {
+    let result = records;
+    
+    if (selectedLocation) {
+      result = result.filter(r => r.location === selectedLocation);
     }
-  }, [search, records]);
+    
+    if (search) {
+      const s = search.toLowerCase();
+      result = result.filter(r => 
+        r.customerName.toLowerCase().includes(s) ||
+        r.note?.toLowerCase().includes(s) ||
+        r.location?.toLowerCase().includes(s)
+      );
+    }
+    
+    return result;
+  }, [search, records, selectedLocation]);
 
   const loadRecords = async () => {
     const data = await getUtangRecords();
@@ -149,6 +169,7 @@ export default function UtangScreen() {
       await updateUtangRecord({
         ...editingRecord,
         customerName,
+        location,
         amount: finalAmount,
         items: selectedItems.length > 0 ? selectedItems : undefined,
         note,
@@ -157,6 +178,7 @@ export default function UtangScreen() {
       const newRecord: UtangRecord = {
         id: Date.now().toString(),
         customerName,
+        location,
         amount: finalAmount,
         items: selectedItems.length > 0 ? selectedItems : undefined,
         note,
@@ -169,12 +191,14 @@ export default function UtangScreen() {
     setModalVisible(false);
     resetForm();
     loadRecords();
+    tintin.say(editingRecord ? 'Record updated!' : 'New debt saved!', 'success');
   };
 
   const handleEdit = (record: UtangRecord) => {
-    if (record.isPaid) return; // Don't edit paid ones
+    if (record.isPaid) return;
     setEditingRecord(record);
     setCustomerName(record.customerName);
+    setLocation(record.location || '');
     setSelectedItems(record.items || []);
     setManualAmount(record.items ? '' : record.amount.toString());
     setNote(record.note || '');
@@ -206,6 +230,7 @@ export default function UtangScreen() {
     setPayingRecord(null);
     setPaymentStep('choose');
     loadRecords();
+    tintin.say('Payment received!', 'success');
   };
 
   const handleDelete = async (id: string) => {
@@ -217,6 +242,7 @@ export default function UtangScreen() {
 
   const resetForm = () => {
     setCustomerName('');
+    setLocation('');
     setSelectedItems([]);
     setManualAmount('');
     setNote('');
@@ -228,21 +254,32 @@ export default function UtangScreen() {
     <TouchableOpacity 
       style={[styles.recordCard, item.isPaid && styles.recordCardPaid]}
       onPress={() => handleEdit(item)}
-      activeOpacity={0.7}
+      activeOpacity={0.8}
     >
       <View style={styles.recordHeader}>
         <View style={styles.customerIcon}>
           <User size={24} color={item.isPaid ? Theme.colors.outline : Theme.colors.primary} />
         </View>
         <View style={styles.customerInfo}>
+          <Text style={styles.recordCategory}>Ledger Record</Text>
           <Text style={[styles.customerName, item.isPaid && styles.textPaid]}>{item.customerName}</Text>
-          <Text style={styles.recordDate}>
-            {new Date(item.createdAt).toLocaleDateString()}
-          </Text>
+          <View style={styles.recordMeta}>
+            <Text style={styles.recordDate}>
+              {new Date(item.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+            </Text>
+            {item.location && (
+              <View style={styles.recordLocationPill}>
+                <MapPin size={10} color={Theme.colors.primary} />
+                <Text style={styles.recordLocationText}>{item.location}</Text>
+              </View>
+            )}
+          </View>
         </View>
-        <Text style={[styles.amountText, item.isPaid && styles.textPaid]}>₱{item.amount.toFixed(0)}</Text>
+        <View style={styles.amountContainer}>
+          <Text style={[styles.amountText, item.isPaid && styles.textPaid]}>₱{item.amount.toFixed(0)}</Text>
+        </View>
       </View>
-      
+
       {(item.items || item.note) && (
         <View style={styles.noteSection}>
           {item.items && item.items.map((it, idx) => (
@@ -259,7 +296,7 @@ export default function UtangScreen() {
             <Text style={styles.paidButtonText}>Mark Paid</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[styles.actionButton, styles.deleteButton]} onPress={() => handleDelete(item.id)}>
-            <Trash2 size={18} color={Theme.colors.tertiary} />
+            <Trash2 size={18} color="#FFF" />
           </TouchableOpacity>
         </View>
       )}
@@ -277,39 +314,77 @@ export default function UtangScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
+      <View style={styles.boutiqueHeader}>
+        <View>
+          <Text style={styles.boutiqueTitle}>Credit</Text>
+          <Text style={styles.boutiqueSubtitle}>Trust Ledger</Text>
+        </View>
+        <TouchableOpacity 
+          style={styles.settingsHeaderBtn} 
+          onPress={() => setIsSettingsOpen(true)}
+        >
+          <Settings size={22} color={Theme.colors.primary} />
+        </TouchableOpacity>
+      </View>
+
       <FlatList
         data={filteredRecords}
         keyExtractor={item => item.id}
         renderItem={renderRecord}
         ListHeaderComponent={
           <>
-            <View style={styles.overviewCard}>
-              <View style={styles.overviewInfo}>
-                <Text style={styles.overviewLabel}>TOTAL CREDIT</Text>
-                <Text style={styles.overviewValue}>₱{totalOwed.toLocaleString()}</Text>
-              </View>
-              <View style={styles.overviewIcon}>
-                <CreditCard size={32} color={Theme.colors.onPrimaryContainer} />
+            <View style={styles.heroSection}>
+              <View style={styles.heroHeader}>
+                <View>
+                  <Text style={styles.heroLabel}>TOTAL CREDIT</Text>
+                  <Text style={styles.heroValue}>₱{totalOwed.toLocaleString()}</Text>
+                </View>
+                <View style={styles.heroIconBox}>
+                  <CreditCard size={32} color="#FFF" opacity={0.9} />
+                </View>
               </View>
             </View>
 
             <View style={styles.searchBar}>
               <Search size={20} color={Theme.colors.outline} />
-              <TextInput
+              <TextInput 
                 style={styles.searchInput}
-                placeholder="Search credits..."
-                placeholderTextColor={Theme.colors.outlineVariant}
+                placeholder="Search customer, note, or place..."
                 value={search}
                 onChangeText={setSearch}
+                placeholderTextColor={Theme.colors.outline}
               />
             </View>
+
+            {/* Location Filter Chips */}
+            {locations.length > 0 && (
+              <View style={styles.filterSection}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterScroll}>
+                  <TouchableOpacity 
+                    style={[styles.filterChip, !selectedLocation && styles.activeFilterChip]}
+                    onPress={() => setSelectedLocation(null)}
+                  >
+                    <Text style={[styles.filterChipText, !selectedLocation && styles.activeFilterChipText]}>All Places</Text>
+                  </TouchableOpacity>
+                  {locations.map(loc => (
+                    <TouchableOpacity 
+                      key={loc}
+                      style={[styles.filterChip, selectedLocation === loc && styles.activeFilterChip]}
+                      onPress={() => setSelectedLocation(loc)}
+                    >
+                      <Text style={[styles.filterChipText, selectedLocation === loc && styles.activeFilterChipText]}>{loc}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+            )}
 
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Credit History</Text>
             </View>
           </>
         }
-        contentContainerStyle={[styles.listContent, { paddingBottom: 100 }]}
+        contentContainerStyle={styles.listContent}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <Contact size={48} color={Theme.colors.outlineVariant} />
@@ -322,12 +397,15 @@ export default function UtangScreen() {
         <Plus size={32} color="#FFF" />
       </TouchableOpacity>
 
+      {/* Entry Modal */}
       <Modal visible={modalVisible} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
+        <BlurView intensity={60} tint="light" style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>{editingRecord ? 'Edit Utang' : 'New Utang'}</Text>
-              <TouchableOpacity onPress={() => { setModalVisible(false); resetForm(); }}><X size={24} color={Theme.colors.outline} /></TouchableOpacity>
+              <TouchableOpacity onPress={() => { setModalVisible(false); resetForm(); }}>
+                <X size={24} color={Theme.colors.outline} />
+              </TouchableOpacity>
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false}>
@@ -338,6 +416,15 @@ export default function UtangScreen() {
                 placeholderTextColor={Theme.colors.outlineVariant}
                 value={customerName} 
                 onChangeText={setCustomerName} 
+              />
+
+              <Text style={styles.inputLabel}>LOCATION (OPTIONAL)</Text>
+              <TextInput 
+                style={styles.input} 
+                placeholder="e.g. Phase 2, Block 4" 
+                placeholderTextColor={Theme.colors.outlineVariant}
+                value={location} 
+                onChangeText={setLocation} 
               />
 
               <View style={styles.amountHeader}>
@@ -392,15 +479,18 @@ export default function UtangScreen() {
               </TouchableOpacity>
             </ScrollView>
           </View>
-        </View>
+        </BlurView>
       </Modal>
 
+      {/* Item Picker Modal */}
       <Modal visible={pickerVisible} animationType="fade" transparent>
-        <View style={styles.modalOverlay}>
+        <BlurView intensity={50} tint="dark" style={styles.centeredOverlay}>
           <View style={styles.pickerCard}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Select Items</Text>
-              <TouchableOpacity onPress={() => setPickerVisible(false)}><X size={24} color={Theme.colors.outline} /></TouchableOpacity>
+              <TouchableOpacity onPress={() => setPickerVisible(false)}>
+                <X size={24} color={Theme.colors.outline} />
+              </TouchableOpacity>
             </View>
             <FlatList
               data={products}
@@ -413,7 +503,9 @@ export default function UtangScreen() {
                   </View>
                   {selectedItems.some(si => si.productId === item.id) && (
                     <View style={styles.pickerBadge}>
-                      <Text style={styles.pickerBadgeText}>{selectedItems.find(si => si.productId === item.id)?.qty}</Text>
+                      <Text style={styles.pickerBadgeText}>
+                        {selectedItems.find(si => si.productId === item.id)?.qty}
+                      </Text>
                     </View>
                   )}
                 </TouchableOpacity>
@@ -425,12 +517,12 @@ export default function UtangScreen() {
               <Text style={styles.pickerDoneText}>Done picking</Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </BlurView>
       </Modal>
 
       {/* Payment Selection Modal */}
       <Modal visible={paymentModalVisible} transparent animationType="fade">
-        <View style={styles.paymentModalOverlay}>
+        <BlurView intensity={60} tint="dark" style={styles.centeredOverlay}>
           <View style={styles.paymentPickerCard}>
             <Text style={styles.paymentPickerTitle}>
               {paymentStep === 'confirm_gcash' ? 'Scan to Pay' : 'Payment Method'}
@@ -496,12 +588,12 @@ export default function UtangScreen() {
               </Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </BlurView>
       </Modal>
 
       {/* Custom Alert Modal */}
       <Modal visible={alertVisible} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
+        <BlurView intensity={70} tint="dark" style={styles.centeredOverlay}>
           <View style={styles.alertCard}>
             {alertConfig.type === 'success' && <CheckCircle2 size={48} color={Theme.colors.primary} style={styles.alertIcon} />}
             {alertConfig.type === 'error' && <X size={48} color={Theme.colors.tertiary} style={styles.alertIcon} />}
@@ -511,20 +603,34 @@ export default function UtangScreen() {
             <Text style={styles.alertTitle}>{alertConfig.title}</Text>
             <Text style={styles.alertMessage}>{alertConfig.message}</Text>
             
-            <TouchableOpacity 
-              style={[
-                styles.alertBtn, 
-                { backgroundColor: alertConfig.type === 'error' || alertConfig.type === 'warning' ? Theme.colors.tertiary : Theme.colors.primary }
-              ]} 
-              onPress={() => {
-                setAlertVisible(false);
-                if (alertConfig.onConfirm) alertConfig.onConfirm();
-              }}
-            >
-              <Text style={styles.alertBtnText}>Got it</Text>
-            </TouchableOpacity>
+            <View style={styles.alertActions}>
+              {alertConfig.onConfirm && (
+                <TouchableOpacity 
+                  style={styles.alertCancelBtn}
+                  onPress={() => setAlertVisible(false)}
+                >
+                  <Text style={styles.alertCancelBtnText}>Cancel</Text>
+                </TouchableOpacity>
+              )}
+              
+              <TouchableOpacity 
+                style={[
+                  styles.alertBtn, 
+                  alertConfig.onConfirm ? { flex: 1 } : { width: '100%' },
+                  { backgroundColor: alertConfig.type === 'error' || alertConfig.type === 'warning' ? Theme.colors.tertiary : Theme.colors.primary }
+                ]} 
+                onPress={() => {
+                  setAlertVisible(false);
+                  if (alertConfig.onConfirm) alertConfig.onConfirm();
+                }}
+              >
+                <Text style={styles.alertBtnText}>
+                  {alertConfig.onConfirm ? 'Confirm' : 'Got it'}
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
+        </BlurView>
       </Modal>
     </SafeAreaView>
   );
@@ -535,40 +641,64 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Theme.colors.background,
   },
+  boutiqueHeader: {
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 8,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  settingsHeaderBtn: {
+    padding: 8,
+    backgroundColor: Theme.colors.surfaceContainerHigh,
+    borderRadius: 16,
+  },
+  boutiqueTitle: {
+    fontFamily: Theme.typography.headlineBlack,
+    fontSize: 34,
+    color: Theme.colors.onSurface,
+    letterSpacing: -1.5,
+  },
+  boutiqueSubtitle: {
+    fontFamily: Theme.typography.bodyBold,
+    fontSize: 12,
+    color: Theme.colors.primary,
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+    opacity: 0.8,
+  },
   listContent: {
     padding: 20,
-    paddingBottom: 100,
+    paddingBottom: 160,
   },
-  overviewCard: {
-    backgroundColor: Theme.colors.primaryContainer,
+  heroSection: {
+    backgroundColor: Theme.colors.primary,
     borderRadius: 28,
     padding: 24,
+    marginBottom: 20,
+  },
+  heroHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 20,
   },
-  overviewInfo: {
-    flex: 1,
-  },
-  overviewLabel: {
+  heroLabel: {
     fontFamily: Theme.typography.bodyBold,
-    color: Theme.colors.onPrimaryContainer,
+    color: '#FFF',
     opacity: 0.7,
     fontSize: 10,
     letterSpacing: 1,
     marginBottom: 4,
   },
-  overviewValue: {
+  heroValue: {
     fontFamily: Theme.typography.headlineBlack,
-    color: Theme.colors.onPrimaryContainer,
+    color: '#FFF',
     fontSize: 32,
   },
-  overviewIcon: {
+  heroIconBox: {
     width: 60,
     height: 60,
-    backgroundColor: 'transparent',
-    borderRadius: 18,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -576,7 +706,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: Theme.colors.surfaceContainerLow,
-    borderRadius: 16,
+    borderRadius: 26,
     paddingHorizontal: 16,
     height: 52,
     marginBottom: 24,
@@ -588,6 +718,33 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: Theme.colors.onSurface,
   },
+  filterSection: {
+    paddingVertical: 16,
+  },
+  filterScroll: {
+    paddingHorizontal: 0,
+  },
+  filterChip: {
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 24,
+    backgroundColor: Theme.colors.surfaceContainerHigh,
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: Theme.colors.outlineVariant,
+  },
+  activeFilterChip: {
+    backgroundColor: Theme.colors.primary,
+    borderColor: Theme.colors.primary,
+  },
+  filterChipText: {
+    fontFamily: Theme.typography.bodyBold,
+    fontSize: 13,
+    color: Theme.colors.onSurfaceVariant,
+  },
+  activeFilterChipText: {
+    color: '#FFF',
+  },
   sectionHeader: {
     marginBottom: 16,
     marginLeft: 4,
@@ -598,55 +755,102 @@ const styles = StyleSheet.create({
     color: Theme.colors.onSurface,
   },
   recordCard: {
-    backgroundColor: Theme.colors.surfaceContainerLowest,
-    borderRadius: 24,
+    backgroundColor: '#FFF',
+    borderRadius: 32,
     padding: 20,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: Theme.colors.outlineVariant + '20',
+    marginBottom: 16,
+    borderWidth: 1.5,
+    borderColor: Theme.colors.outlineVariant + '40',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.03,
+    shadowRadius: 12,
+    elevation: 2,
   },
   recordCardPaid: {
-    opacity: 0.6,
+    opacity: 0.7,
   },
   recordHeader: {
     flexDirection: 'row',
     alignItems: 'center',
+    marginBottom: 12,
   },
   customerIcon: {
-    width: 44,
-    height: 44,
-    backgroundColor: Theme.colors.surfaceContainerHigh,
-    borderRadius: 12,
+    width: 52,
+    height: 52,
+    borderRadius: 24,
+    backgroundColor: Theme.colors.surfaceContainerLow,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 12,
+    marginRight: 16,
   },
   customerInfo: {
     flex: 1,
   },
+  recordCategory: {
+    fontFamily: Theme.typography.bodyBold,
+    fontSize: 10,
+    color: Theme.colors.primary,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: 2,
+  },
   customerName: {
-    fontFamily: Theme.typography.headline,
-    fontSize: 16,
+    fontFamily: Theme.typography.headlineBlack,
+    fontSize: 18,
+    color: Theme.colors.onSurface,
+    marginBottom: 4,
+    letterSpacing: -0.5,
+  },
+  recordMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 4,
   },
   recordDate: {
-    fontFamily: Theme.typography.bodyMedium,
+    fontFamily: Theme.typography.bodyBold,
     fontSize: 12,
     color: Theme.colors.outline,
   },
+  recordLocationPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: Theme.colors.surfaceContainerLow,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+    marginLeft: 4,
+  },
+  recordLocationText: {
+    fontFamily: Theme.typography.bodyBold,
+    fontSize: 11,
+    color: Theme.colors.primary,
+  },
+  amountContainer: {
+    backgroundColor: Theme.colors.surfaceContainerLow,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+  },
   amountText: {
     fontFamily: Theme.typography.headlineBlack,
-    fontSize: 18,
-    color: Theme.colors.tertiary,
+    fontSize: 20,
+    color: Theme.colors.onSurface,
   },
   textPaid: {
     color: Theme.colors.outline,
     textDecorationLine: 'line-through',
   },
   noteSection: {
-    backgroundColor: Theme.colors.surfaceContainerLow,
+    backgroundColor: Theme.colors.surfaceContainerLowest,
     padding: 12,
     borderRadius: 16,
-    marginTop: 12,
+    borderWidth: 1,
+    borderColor: Theme.colors.outlineVariant + '40',
+    marginBottom: 16,
   },
   itemSummaryText: {
     fontFamily: Theme.typography.bodyBold,
@@ -660,28 +864,37 @@ const styles = StyleSheet.create({
   },
   cardButtons: {
     flexDirection: 'row',
-    marginTop: 16,
-    gap: 8,
+    gap: 16,
+    marginTop: 8,
   },
   actionButton: {
-    height: 44,
-    borderRadius: 12,
-    justifyContent: 'center',
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    borderRadius: 16,
   },
   paidButton: {
     flex: 1,
     backgroundColor: Theme.colors.primary,
-    flexDirection: 'row',
+    shadowColor: Theme.colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 4,
   },
   paidButtonText: {
-    fontFamily: Theme.typography.bodyBold,
+    fontFamily: Theme.typography.headlineBlack,
     color: '#FFF',
-    fontSize: 13,
+    fontSize: 14,
+    letterSpacing: 0.5,
   },
   deleteButton: {
-    width: 44,
-    backgroundColor: Theme.colors.tertiaryContainer + '30',
+    width: 52,
+    backgroundColor: Theme.colors.tertiary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 16,
   },
   paidBadge: {
     flexDirection: 'row',
@@ -694,54 +907,9 @@ const styles = StyleSheet.create({
     color: Theme.colors.primary,
     fontSize: 10,
   },
-  // Custom Alert Styles
-  alertCard: {
-    width: width * 0.85,
-    backgroundColor: Theme.colors.surface,
-    borderRadius: 32,
-    padding: 32,
-    alignItems: 'center',
-    // Premium shadow
-    elevation: 24,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 16 },
-    shadowOpacity: 0.35,
-    shadowRadius: 24,
-  },
-  alertIcon: {
-    marginBottom: 20,
-  },
-  alertTitle: {
-    fontFamily: Theme.typography.headlineBlack,
-    fontSize: 22,
-    color: Theme.colors.onSurface,
-    marginBottom: 8,
-    textAlign: 'center',
-    letterSpacing: -0.5,
-  },
-  alertMessage: {
-    fontFamily: Theme.typography.bodyMedium,
-    fontSize: 15,
-    color: Theme.colors.onSurfaceVariant,
-    textAlign: 'center',
-    marginBottom: 24,
-    lineHeight: 22,
-  },
-  alertBtn: {
-    width: '100%',
-    paddingVertical: 16,
-    borderRadius: 16,
-    alignItems: 'center',
-  },
-  alertBtnText: {
-    fontFamily: Theme.typography.headlineBlack,
-    color: '#FFF',
-    fontSize: 16,
-    letterSpacing: 0.5,
-  },
   fab: {
     position: 'absolute',
-    bottom: 24,
+    bottom: 120,
     right: 24,
     backgroundColor: Theme.colors.primary,
     width: 64,
@@ -750,6 +918,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     elevation: 8,
+    shadowColor: Theme.colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    zIndex: 99,
   },
   emptyContainer: {
     padding: 80,
@@ -761,18 +934,29 @@ const styles = StyleSheet.create({
     color: Theme.colors.outline,
     fontSize: 16,
   },
-  // Modal
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'transparent',
+    backgroundColor: 'rgba(255,255,255,0.05)', // Almost clear for blur
     justifyContent: 'flex-end',
   },
-  modalContent: {
-    backgroundColor: Theme.colors.surface,
-    borderTopLeftRadius: 32,
-    borderTopRightRadius: 32,
+  centeredOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.15)', // Lightened for BlurView
+    justifyContent: 'center',
+    alignItems: 'center',
     padding: 24,
+  },
+  modalContent: {
+    backgroundColor: Theme.colors.surface, // Solid focus
+    borderTopLeftRadius: 40,
+    borderTopRightRadius: 40,
+    padding: 32,
     maxHeight: '90%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -20 },
+    shadowOpacity: 0.1,
+    shadowRadius: 30,
+    elevation: 20,
   },
   modalHeader: {
     flexDirection: 'row',
@@ -800,6 +984,11 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     color: Theme.colors.onSurface,
   },
+  errorInput: {
+    borderWidth: 1.5,
+    borderColor: Theme.colors.tertiary,
+    backgroundColor: Theme.colors.tertiary + '08',
+  },
   amountHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -820,6 +1009,7 @@ const styles = StyleSheet.create({
   selectedItemRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
     marginBottom: 8,
   },
   selectedItemName: {
@@ -864,17 +1054,11 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontSize: 18,
   },
-  errorInput: {
-    borderWidth: 1.5,
-    borderColor: Theme.colors.tertiary,
-    backgroundColor: Theme.colors.tertiary + '08',
-  },
-  // Picker
   pickerCard: {
     backgroundColor: '#FFF',
     borderRadius: 32,
     padding: 24,
-    margin: 20,
+    width: '100%',
     elevation: 20,
   },
   pickerItem: {
@@ -922,14 +1106,6 @@ const styles = StyleSheet.create({
     fontFamily: Theme.typography.bodyBold,
     color: '#FFF',
   },
-  // Payment Modal Styles
-  paymentModalOverlay: {
-    flex: 1,
-    backgroundColor: 'transparent',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
   paymentPickerCard: {
     backgroundColor: '#FFF',
     width: '100%',
@@ -937,16 +1113,11 @@ const styles = StyleSheet.create({
     padding: 32,
     alignItems: 'center',
     elevation: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.2,
-    shadowRadius: 20,
   },
   paymentPickerTitle: {
     fontFamily: Theme.typography.headlineBlack,
     fontSize: 24,
     color: Theme.colors.onSurface,
-    textAlign: 'center',
   },
   paymentPickerSub: {
     fontFamily: Theme.typography.bodyMedium,
@@ -954,7 +1125,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 8,
     marginBottom: 32,
-    lineHeight: 20,
   },
   paymentOptions: {
     width: '100%',
@@ -966,7 +1136,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     width: '100%',
-    elevation: 2,
   },
   paymentBtnText: {
     fontFamily: Theme.typography.headlineBlack,
@@ -983,7 +1152,6 @@ const styles = StyleSheet.create({
     color: Theme.colors.outline,
     fontSize: 14,
   },
-  // QR Selection Styles
   qrPaymentContainer: {
     alignItems: 'center',
     width: '100%',
@@ -992,7 +1160,6 @@ const styles = StyleSheet.create({
     width: 240,
     height: 240,
     borderRadius: 24,
-    backgroundColor: '#F8F9FA',
   },
   qrFallback: {
     width: 240,
@@ -1009,5 +1176,59 @@ const styles = StyleSheet.create({
     fontFamily: Theme.typography.bodyMedium,
     color: Theme.colors.outline,
     marginTop: 12,
+  },
+  alertCard: {
+    width: width * 0.85,
+    backgroundColor: Theme.colors.surface,
+    borderRadius: 32,
+    padding: 32,
+    alignItems: 'center',
+    elevation: 24,
+  },
+  alertIcon: {
+    marginBottom: 20,
+  },
+  alertTitle: {
+    fontFamily: Theme.typography.headlineBlack,
+    fontSize: 22,
+    color: Theme.colors.onSurface,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  alertMessage: {
+    fontFamily: Theme.typography.bodyMedium,
+    fontSize: 15,
+    color: Theme.colors.onSurfaceVariant,
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  alertActions: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
+  },
+  alertBtn: {
+    paddingVertical: 16,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  alertBtnText: {
+    fontFamily: Theme.typography.headlineBlack,
+    color: '#FFF',
+    fontSize: 16,
+  },
+  alertCancelBtn: {
+    flex: 1,
+    paddingVertical: 16,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Theme.colors.surfaceVariant,
+  },
+  alertCancelBtnText: {
+    fontFamily: Theme.typography.bodyBold,
+    color: Theme.colors.onSurfaceVariant,
+    fontSize: 16,
   },
 });

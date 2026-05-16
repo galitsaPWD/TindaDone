@@ -14,7 +14,8 @@ import {
   Alert,
   ActionSheetIOS
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { BlurView } from 'expo-blur';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -47,6 +48,7 @@ const { width, height } = Dimensions.get('window');
 
 
 export default function ProductDetailScreen() {
+  const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams();
   const router = useRouter();
 
@@ -510,16 +512,16 @@ export default function ProductDetailScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.iconButton}>
-          <ChevronLeft size={28} color={Theme.colors.onSurface} />
+        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+          <ChevronLeft size={24} color={Theme.colors.onSurface} strokeWidth={2.5} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Product Insights</Text>
-        <TouchableOpacity onPress={() => setEditVisible(true)} style={styles.iconButton}>
-          <Edit2 size={24} color={Theme.colors.primary} />
+        <Text style={styles.headerTitle}>Product Suite</Text>
+        <TouchableOpacity onPress={() => setEditVisible(true)} style={styles.editBtn}>
+          <Edit2 size={20} color={Theme.colors.primary} />
         </TouchableOpacity>
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <View style={styles.heroSection}>
           <View style={styles.imageBox}>
             {product.photoUri ? (
@@ -529,106 +531,120 @@ export default function ProductDetailScreen() {
                 <Text style={styles.letterText}>{product.name.charAt(0).toUpperCase()}</Text>
               </View>
             )}
+            <View style={styles.categoryBadge}>
+              <Text style={styles.categoryText}>{product.category?.toUpperCase() || 'GENERAL'}</Text>
+            </View>
           </View>
           <View style={styles.mainInfo}>
-            <Text style={styles.productCategory}>{product.category?.toUpperCase() || 'GENERAL'}</Text>
             <Text style={styles.productName}>{product.name}</Text>
-            <View style={styles.priceContainer}>
-              <Text style={styles.productPrice}>₱{product.price.toFixed(0)}</Text>
-              <Text style={styles.productUnit}>/{product.unit || 'pc'}</Text>
+            <View style={styles.priceRow}>
+              <Text style={styles.productPrice}>₱{product.price.toLocaleString()}</Text>
+              <Text style={styles.productUnit}>per {product.unit || 'pc'}</Text>
             </View>
           </View>
         </View>
 
-        <View style={styles.statsGrid}>
-          <View style={styles.statCard}>
-            <Text style={styles.statLabel}>Current Stock</Text>
-            <Text style={[styles.statValue, product.stock <= product.lowStockThreshold && { color: Theme.colors.tertiary }]}>
+        <View style={styles.bentoGrid}>
+          <View style={styles.bentoCard}>
+            <View style={styles.bentoIcon}>
+              <Package size={18} color={Theme.colors.primary} />
+            </View>
+            <Text style={styles.bentoLabel}>Inventory Level</Text>
+            <Text style={[styles.bentoValue, product.stock <= product.lowStockThreshold && { color: Theme.colors.tertiary }]}>
               {product.stock}
             </Text>
-            <Text style={styles.statSubText}>{product.unit || 'units'} available</Text>
+            <Text style={styles.bentoSub}>{product.unit || 'units'} left</Text>
           </View>
-          <View style={[styles.statCard, { backgroundColor: Theme.colors.secondaryContainer + '40' }]}>
-            <Text style={styles.statLabel}>Profit Margin</Text>
-            <Text style={styles.statValue}>
+          <View style={styles.bentoCard}>
+            <View style={[styles.bentoIcon, { backgroundColor: '#defbe6' }]}>
+              <TrendingUp size={18} color="#0a643b" />
+            </View>
+            <Text style={styles.bentoLabel}>Profit Margin</Text>
+            <Text style={styles.bentoValue}>
               {product.costPrice ? `₱${(product.price - product.costPrice).toFixed(0)}` : '--'}
             </Text>
-            <Text style={styles.statSubText}>per {product.unit || 'unit'}</Text>
+            <Text style={styles.bentoSub}>per {product.unit || 'unit'}</Text>
           </View>
         </View>
 
-        <TouchableOpacity style={styles.restockQuickBtn} onPress={openRestock}>
-          <Plus size={24} color="#FFF" style={{ marginRight: 8 }} />
-          <Text style={styles.restockQuickText}>Log New Restock</Text>
+        <TouchableOpacity style={styles.primaryActionBtn} onPress={openRestock}>
+          <Plus size={22} color="#FFF" />
+          <Text style={styles.primaryActionText}>Log New Restock</Text>
         </TouchableOpacity>
 
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <History size={20} color={Theme.colors.primary} />
-            <Text style={styles.sectionTitle}>Restock History</Text>
+            <View style={styles.sectionIcon}>
+              <History size={18} color={Theme.colors.primary} />
+            </View>
+            <Text style={styles.sectionTitle}>Stock Timeline</Text>
           </View>
           {restockLogs.length === 0 ? (
-            <View style={styles.emptyLogs}>
+            <View style={styles.emptyLogsCard}>
               <Text style={styles.emptyLogsText}>No restock logs found for this item.</Text>
             </View>
           ) : (
-            restockLogs.map((log, index) => (
-              <TouchableOpacity 
-                key={log.id} 
-                style={[styles.logRow, index === restockLogs.length - 1 && { borderBottomWidth: 0 }]}
-                onPress={() => {
-                  setSelectedLog(log);
-                  setDetailVisible(true);
-                }}
-              >
-                <View style={styles.logInfo}>
-                  <Text style={styles.logQty}>
-                    {log.isBulk && log.piecesPerPackAtRestock 
-                      ? `+${Math.floor(log.qtyAdded / log.piecesPerPackAtRestock)} Packs` 
-                      : `+${log.qtyAdded} ${product.unit || 'units'}`}
-                  </Text>
-                  <Text style={styles.logDate}>{new Date(log.timestamp).toLocaleDateString()} • {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
-                </View>
-                {log.totalCost && (
-                  <View style={styles.logCost}>
-                    <Text style={styles.logCostLabel}>COST</Text>
-                    <Text style={styles.logCostValue}>₱{log.totalCost.toFixed(0)}</Text>
+            <View style={styles.logListCard}>
+              {restockLogs.map((log, index) => (
+                <TouchableOpacity 
+                  key={log.id} 
+                  style={[styles.logRow, index === restockLogs.length - 1 && { borderBottomWidth: 0 }]}
+                  onPress={() => {
+                    setSelectedLog(log);
+                    setDetailVisible(true);
+                  }}
+                >
+                  <View style={styles.logInfo}>
+                    <Text style={styles.logQty}>
+                      {log.isBulk && log.piecesPerPackAtRestock 
+                        ? `+${Math.floor(log.qtyAdded / log.piecesPerPackAtRestock)} Packs` 
+                        : `+${log.qtyAdded} ${product.unit || 'units'}`}
+                    </Text>
+                    <Text style={styles.logDate}>{new Date(log.timestamp).toLocaleDateString()} • {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
                   </View>
-                )}
-              </TouchableOpacity>
-            ))
+                  {log.totalCost && (
+                    <View style={styles.logCost}>
+                      <Text style={styles.logCostLabel}>COST</Text>
+                      <Text style={styles.logCostValue}>₱{log.totalCost.toFixed(0)}</Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+              ))}
+            </View>
           )}
         </View>
 
         <TouchableOpacity 
-          style={styles.dangerButton} 
+          style={styles.dangerZoneBtn} 
           onPress={() => setDeleteVisible(true)}
         >
-          <Trash2 size={20} color={Theme.colors.tertiary} style={{ marginRight: 8 }} />
-          <Text style={styles.dangerButtonText}>Delete Product permanently</Text>
+          <Trash2 size={18} color={Theme.colors.tertiary} />
+          <Text style={styles.dangerZoneText}>Remove Product from Suite</Text>
         </TouchableOpacity>
       </ScrollView>
 
       {/* Restock Modal */}
       <Modal visible={restockVisible} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
+        <BlurView intensity={25} tint="dark" style={styles.modalOverlay}>
           <TouchableOpacity activeOpacity={1} style={StyleSheet.absoluteFill} onPress={() => setRestockVisible(false)} />
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Stock Integration</Text>
             
             <ScrollView showsVerticalScrollIndicator={false}>
-            <View style={styles.restockTypeSelector}>
+            <View style={styles.typeSelector}>
               <TouchableOpacity 
-                style={[styles.restockTypeBtn, !isPackRestock && styles.restockTypeBtnActive]}
+                style={[styles.typeBtn, !isPackRestock && styles.typeBtnActive]}
                 onPress={() => setIsPackRestock(false)}
               >
-                <Text style={[styles.restockTypeText, !isPackRestock && styles.restockTypeTextActive]}>Per Piece</Text>
+                <Tag size={18} color={!isPackRestock ? '#FFF' : Theme.colors.outline} />
+                <Text style={[styles.typeBtnText, !isPackRestock && styles.typeBtnTextActive]}>Single Item</Text>
               </TouchableOpacity>
               <TouchableOpacity 
-                style={[styles.restockTypeBtn, isPackRestock && styles.restockTypeBtnActive]}
+                style={[styles.typeBtn, isPackRestock && styles.typeBtnActive]}
                 onPress={() => setIsPackRestock(true)}
               >
-                <Text style={[styles.restockTypeText, isPackRestock && styles.restockTypeTextActive]}>Bulk Packs</Text>
+                <Package size={18} color={isPackRestock ? '#FFF' : Theme.colors.outline} />
+                <Text style={[styles.typeBtnText, isPackRestock && styles.typeBtnTextActive]}>Bulk Packs</Text>
               </TouchableOpacity>
             </View>
 
@@ -794,12 +810,12 @@ export default function ProductDetailScreen() {
             </View>
             </ScrollView>
           </View>
-        </View>
+        </BlurView>
       </Modal>
 
       {/* Edit Product Modal */}
       <Modal visible={editVisible} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
+        <BlurView intensity={30} tint="light" style={styles.modalOverlay}>
           <TouchableOpacity activeOpacity={1} style={StyleSheet.absoluteFill} onPress={() => setEditVisible(false)} />
           <View style={styles.modalCard}>
              <View style={styles.modalHeader}>
@@ -1014,12 +1030,12 @@ export default function ProductDetailScreen() {
               </View>
             </ScrollView>
           </View>
-        </View>
+        </BlurView>
       </Modal>
 
       {/* Log Detail Modal */}
       <Modal visible={detailVisible} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
+        <BlurView intensity={40} tint="light" style={styles.modalOverlay}>
           <TouchableOpacity 
             activeOpacity={1} 
             style={StyleSheet.absoluteFill} 
@@ -1106,13 +1122,13 @@ export default function ProductDetailScreen() {
               </ScrollView>
             )}
           </View>
-        </View>
+        </BlurView>
       </Modal>
 
       {/* Delete Confirmation Modal */}
       <Modal visible={deleteVisible} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
+        <BlurView intensity={50} tint="dark" style={styles.centeredModalOverlay}>
+          <View style={styles.centeredModalCard}>
             <Text style={styles.modalTitle}>Delete Product</Text>
             <Text style={styles.deleteDesc}>Are you sure you want to delete "{product.name}"? This action cannot be undone.</Text>
             <View style={styles.modalActions}>
@@ -1124,7 +1140,7 @@ export default function ProductDetailScreen() {
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </BlurView>
       </Modal>
 
       {/* Barcode Scanner Modal */}
@@ -1132,16 +1148,12 @@ export default function ProductDetailScreen() {
         <View style={styles.scannerOverlay}>
           <CameraView
             style={styles.scannerView}
-            onBarcodeScanned={({ data }) => {
-              if (data) {
-                setBarcode(data);
-                setScannerVisible(false);
-                if (beepSound.current) beepSound.current.replayAsync();
-              }
+            onBarcodeScanned={handleBarcodeScanned}
+            barcodeScannerSettings={{
+              barcodeTypes: ["qr", "ean13", "ean8", "upc_a", "upc_e", "code128", "code39", "itf14"],
             }}
-          />
-          <View style={styles.scannerHUDOverlay}>
-            <View style={styles.scannerHUDHeaderInModal}>
+          >
+            <View style={[styles.scannerHUDHeaderInModal, { paddingTop: Math.max(insets.top, Platform.OS === 'android' ? 50 : 40) }]}>
               <Text style={styles.scannerHUDTitleInModal}>Scan Barcode</Text>
               <TouchableOpacity onPress={() => setScannerVisible(false)}>
                 <X size={28} color="#FFF" />
@@ -1149,13 +1161,13 @@ export default function ProductDetailScreen() {
             </View>
             <View style={styles.scannerCrosshair} />
             <Text style={styles.scannerHint}>Align barcode within the box</Text>
-          </View>
+          </CameraView>
         </View>
       </Modal>
 
       {/* Custom Alert Modal */}
       <Modal visible={alertVisible} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
+        <BlurView intensity={60} tint="dark" style={styles.modalOverlay}>
           <View style={styles.alertCard}>
             {alertConfig.type === 'success' && <CheckCircle2 size={48} color={Theme.colors.primary} style={styles.alertIcon} />}
             {alertConfig.type === 'error' && <X size={48} color={Theme.colors.tertiary} style={styles.alertIcon} />}
@@ -1178,7 +1190,7 @@ export default function ProductDetailScreen() {
               <Text style={styles.alertBtnText}>Got it</Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </BlurView>
       </Modal>
     </SafeAreaView>
   );
@@ -1193,16 +1205,32 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 16,
   },
-  iconButton: {
-    padding: 8,
+  backButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Theme.colors.surfaceContainerLow,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  editBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Theme.colors.primary + '15', // Glassy emerald
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: Theme.colors.primary + '20',
   },
   headerTitle: {
     fontFamily: Theme.typography.headlineBlack,
-    fontSize: 24,
+    fontSize: 22,
     color: Theme.colors.onSurface,
+    letterSpacing: -0.5,
   },
   scrollContent: {
     padding: 20,
@@ -1214,19 +1242,20 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   imageBox: {
-    width: 140,
-    height: 140,
-    borderRadius: 70,
-    backgroundColor: Theme.colors.surfaceContainerHigh,
+    width: 160,
+    height: 160,
+    borderRadius: 48,
+    backgroundColor: Theme.colors.surfaceContainerLowest,
     overflow: 'hidden',
-    borderWidth: 4,
-    borderColor: Theme.colors.surface,
+    borderWidth: 2,
+    borderColor: Theme.colors.outlineVariant,
     elevation: 8,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 10,
-    marginBottom: 20,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.1,
+    shadowRadius: 20,
+    marginBottom: 24,
+    position: 'relative',
   },
   productImage: {
     width: '100%',
@@ -1240,83 +1269,119 @@ const styles = StyleSheet.create({
   },
   letterText: {
     fontFamily: Theme.typography.headlineBlack,
-    fontSize: 40,
+    fontSize: 56,
     color: Theme.colors.onPrimaryContainer,
+  },
+  categoryBadge: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  categoryText: {
+    fontFamily: Theme.typography.bodyBold,
+    color: '#FFF',
+    fontSize: 10,
+    letterSpacing: 1.5,
   },
   mainInfo: {
     alignItems: 'center',
   },
-  productCategory: {
-    fontFamily: Theme.typography.bodyBold,
-    fontSize: 10,
-    color: Theme.colors.primary,
-    letterSpacing: 2,
-    marginBottom: 4,
-  },
   productName: {
     fontFamily: Theme.typography.headlineBlack,
-    fontSize: 28,
+    fontSize: 32,
     color: Theme.colors.onSurface,
     textAlign: 'center',
+    letterSpacing: -1,
   },
-  priceContainer: {
+  priceRow: {
     flexDirection: 'row',
-    alignItems: 'baseline',
+    alignItems: 'center',
     marginTop: 8,
-    justifyContent: 'center',
+    gap: 8,
   },
   productPrice: {
     fontFamily: Theme.typography.headlineBlack,
     fontSize: 28,
-    color: Theme.colors.onSurface,
+    color: Theme.colors.primary,
   },
   productUnit: {
-    fontFamily: Theme.typography.bodyMedium,
+    fontFamily: Theme.typography.bodySemiBold,
     fontSize: 14,
     color: Theme.colors.outline,
-    marginLeft: 4,
   },
-  statsGrid: {
+  bentoGrid: {
     flexDirection: 'row',
     gap: 12,
     marginBottom: 24,
   },
-  statCard: {
+  bentoCard: {
     flex: 1,
-    backgroundColor: Theme.colors.primaryContainer + '40',
+    backgroundColor: Theme.colors.surfaceContainerLowest,
     borderRadius: 24,
-    padding: 16,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: Theme.colors.outlineVariant,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 2,
   },
-  statLabel: {
+  bentoIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: Theme.colors.primary + '10', // Soft glassy background
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: Theme.colors.primary + '15',
+  },
+  bentoLabel: {
     fontFamily: Theme.typography.bodyBold,
     fontSize: 11,
-    color: Theme.colors.primary,
-    marginBottom: 8,
+    color: Theme.colors.outline,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    marginBottom: 4,
   },
-  statValue: {
+  bentoValue: {
     fontFamily: Theme.typography.headlineBlack,
     fontSize: 24,
     color: Theme.colors.onSurface,
+    letterSpacing: -0.5,
   },
-  statSubText: {
+  bentoSub: {
     fontFamily: Theme.typography.bodyMedium,
     fontSize: 12,
     color: Theme.colors.outline,
     marginTop: 2,
   },
-  restockQuickBtn: {
-    backgroundColor: Theme.colors.primary,
-    height: 60,
-    borderRadius: 20,
+  primaryActionBtn: {
+    backgroundColor: Theme.colors.primary, // Back to solid for 'pop'
+    height: 64,
+    borderRadius: 24,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 32,
+    gap: 12,
+    marginBottom: 40,
+    shadowColor: Theme.colors.primary,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 8,
   },
-  restockQuickText: {
-    fontFamily: Theme.typography.bodyBold,
+  primaryActionText: {
+    fontFamily: Theme.typography.headlineBlack,
     color: '#FFF',
     fontSize: 16,
+    letterSpacing: 0.5,
   },
   section: {
     marginBottom: 32,
@@ -1324,45 +1389,71 @@ const styles = StyleSheet.create({
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 12,
     marginBottom: 16,
   },
-  sectionTitle: {
-    fontFamily: Theme.typography.headline,
-    fontSize: 18,
-    color: Theme.colors.onSurface,
+  sectionIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: Theme.colors.primary + '10', // Matching glassy style
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: Theme.colors.primary + '15',
   },
-  emptyLogs: {
-    padding: 24,
+  sectionTitle: {
+    fontFamily: Theme.typography.headlineBlack,
+    fontSize: 20,
+    color: Theme.colors.onSurface,
+    letterSpacing: -0.5,
+  },
+  emptyLogsCard: {
+    padding: 32,
     alignItems: 'center',
     backgroundColor: Theme.colors.surfaceContainerLow,
-    borderRadius: 16,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: Theme.colors.outlineVariant,
+    borderStyle: 'dashed',
   },
   emptyLogsText: {
     fontFamily: Theme.typography.bodyMedium,
     color: Theme.colors.outline,
     fontSize: 14,
   },
+  logListCard: {
+    backgroundColor: Theme.colors.surfaceContainerLowest,
+    borderRadius: 32,
+    borderWidth: 1,
+    borderColor: Theme.colors.outlineVariant,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.05,
+    shadowRadius: 20,
+    elevation: 4,
+  },
   logRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 16,
+    padding: 20,
     borderBottomWidth: 1,
-    borderBottomColor: Theme.colors.outlineVariant + '30',
+    borderBottomColor: Theme.colors.outlineVariant + '40',
   },
   logInfo: {
     flex: 1,
   },
   logQty: {
-    fontFamily: Theme.typography.headline,
+    fontFamily: Theme.typography.bodyBold,
     fontSize: 16,
     color: Theme.colors.onSurface,
   },
   logDate: {
     fontFamily: Theme.typography.bodyMedium,
     fontSize: 12,
-    color: Theme.colors.onSurfaceVariant,
+    color: Theme.colors.outline,
     marginTop: 2,
   },
   logCost: {
@@ -1370,187 +1461,269 @@ const styles = StyleSheet.create({
   },
   logCostLabel: {
     fontFamily: Theme.typography.bodyBold,
-    fontSize: 9,
+    fontSize: 10,
     color: Theme.colors.outline,
+    letterSpacing: 1,
   },
   logCostValue: {
-    fontFamily: Theme.typography.headline,
-    fontSize: 16,
-    color: Theme.colors.primary,
+    fontFamily: Theme.typography.headlineBlack,
+    fontSize: 18,
+    color: Theme.colors.onSurface,
   },
-  dangerButton: {
+  dangerZoneBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 16,
-    opacity: 0.6,
+    paddingVertical: 20,
+    gap: 10,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: Theme.colors.tertiary + '30',
   },
-  dangerButtonText: {
-    fontFamily: Theme.typography.bodySemiBold,
+  dangerZoneText: {
+    fontFamily: Theme.typography.bodyBold,
     color: Theme.colors.tertiary,
     fontSize: 14,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'transparent',
+    backgroundColor: 'rgba(255,255,255,0.1)', // Almost clear, handled by BlurView
     justifyContent: 'flex-end',
   },
   modalCard: {
-    backgroundColor: '#FFF',
-    borderTopLeftRadius: 32,
-    borderTopRightRadius: 32,
-    padding: 24,
-    minHeight: height * 0.85,
+    backgroundColor: Theme.colors.surface,
+    borderTopLeftRadius: 40,
+    borderTopRightRadius: 40,
+    padding: 32,
     maxHeight: '90%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -20 },
+    shadowOpacity: 0.2,
+    shadowRadius: 30,
+    elevation: 20,
+  },
+  centeredModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.15)', // Lightened for BlurView
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  centeredModalCard: {
+    width: '100%',
+    backgroundColor: Theme.colors.background,
+    borderRadius: 32,
+    padding: 24,
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+  },
+  deleteDesc: {
+    fontFamily: Theme.typography.bodyMedium,
+    fontSize: 16,
+    color: Theme.colors.onSurfaceVariant,
+    textAlign: 'center',
+    lineHeight: 24,
+    marginVertical: 24,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 24,
   },
   modalTitle: {
     fontFamily: Theme.typography.headlineBlack,
-    fontSize: 22,
+    fontSize: 26,
     color: Theme.colors.onSurface,
+    letterSpacing: -1,
+  },
+  inputLabel: {
+    fontFamily: Theme.typography.bodyBold,
+    fontSize: 11,
+    color: Theme.colors.primary,
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+    marginBottom: 10,
+    marginLeft: 4,
+  },
+  input: {
+    backgroundColor: 'rgba(255, 255, 255, 0.4)', // Frosted glass input
+    height: 64,
+    borderRadius: 20,
+    paddingHorizontal: 20,
+    fontFamily: Theme.typography.bodySemiBold,
+    fontSize: 16,
+    color: Theme.colors.onSurface,
+    borderWidth: 1.5,
+    borderColor: Theme.colors.outlineVariant,
     marginBottom: 20,
-    textAlign: 'center',
+  },
+  inputRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  errorInput: {
+    borderColor: Theme.colors.tertiary,
+    backgroundColor: Theme.colors.tertiary + '05',
+  },
+  insightBox: {
+    backgroundColor: Theme.colors.primaryContainer + '30',
+    padding: 16,
+    borderRadius: 16,
+    marginBottom: 24,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: Theme.colors.primary + '20',
+  },
+  insightRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  insightText: {
+    fontFamily: Theme.typography.bodySemiBold,
+    fontSize: 13,
+    color: Theme.colors.onSurface,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 8,
+  },
+  cancelBtn: {
+    height: 60,
+    paddingHorizontal: 24,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: Theme.colors.surfaceContainerHigh,
+  },
+  cancelBtnText: {
+    fontFamily: Theme.typography.bodyBold,
+    color: Theme.colors.outline,
+    fontSize: 16,
+  },
+  saveBtn: {
+    height: 60,
+    borderRadius: 20,
+    backgroundColor: Theme.colors.primary, // Back to solid
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 6,
+    shadowColor: Theme.colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+  },
+  saveBtnText: {
+    fontFamily: Theme.typography.bodyBold,
+    color: '#FFF',
+    fontSize: 16,
   },
   imagePickerSection: {
     alignItems: 'center',
     marginBottom: 24,
   },
   imagePickerBox: {
-    width: 100,
-    height: 100,
+    width: 120,
+    height: 120,
+    borderRadius: 32,
     backgroundColor: Theme.colors.surfaceContainerLow,
-    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: Theme.colors.outlineVariant,
+    borderStyle: 'dashed',
     justifyContent: 'center',
     alignItems: 'center',
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: Theme.colors.outlineVariant + '40',
+    position: 'relative',
   },
   pickedImage: {
     width: '100%',
     height: '100%',
+    borderRadius: 30,
   },
   imagePlaceholder: {
     alignItems: 'center',
   },
   imagePlaceholderText: {
     fontFamily: Theme.typography.bodyBold,
-    fontSize: 10,
+    fontSize: 12,
     color: Theme.colors.outline,
-    marginTop: 4,
+    marginTop: 8,
   },
   cameraBadgeFloating: {
     position: 'absolute',
-    bottom: -6,
-    right: -6,
+    bottom: -8,
+    right: -8,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: Theme.colors.primary,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
+    borderWidth: 3,
     borderColor: '#FFF',
     elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 20,
   },
   typeSelector: {
     flexDirection: 'row',
     backgroundColor: Theme.colors.surfaceContainerLow,
-    borderRadius: 16,
-    padding: 4,
+    borderRadius: 32,
+    padding: 6,
     marginBottom: 24,
+    borderWidth: 1,
+    borderColor: Theme.colors.outlineVariant + '40',
   },
   typeBtn: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 10,
-    borderRadius: 12,
+    paddingVertical: 12,
+    borderRadius: 26,
     gap: 8,
   },
   typeBtnActive: {
     backgroundColor: Theme.colors.primary,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
+    elevation: 4,
+    shadowColor: Theme.colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
   },
   typeBtnText: {
     fontFamily: Theme.typography.bodyBold,
-    fontSize: 13,
+    fontSize: 14,
     color: Theme.colors.outline,
   },
   typeBtnTextActive: {
     color: '#FFF',
   },
-  restockTypeSelector: {
-    flexDirection: 'row',
-    backgroundColor: Theme.colors.surfaceContainerLow,
-    borderRadius: 12,
-    padding: 4,
-    marginBottom: 20,
-  },
-  restockTypeBtn: {
-    flex: 1,
-    paddingVertical: 10,
-    alignItems: 'center',
-    borderRadius: 8,
-  },
-  restockTypeBtnActive: {
-    backgroundColor: Theme.colors.primary,
-  },
-  restockTypeText: {
-    fontFamily: Theme.typography.bodyBold,
-    fontSize: 13,
-    color: Theme.colors.onSurfaceVariant,
-  },
-  restockTypeTextActive: {
-    color: '#FFF',
-  },
-  inputLabel: {
-    fontFamily: Theme.typography.bodyBold,
-    fontSize: 11,
-    color: Theme.colors.primary,
-    marginBottom: 6,
-    marginLeft: 4,
-  },
-  input: {
-    backgroundColor: Theme.colors.surfaceContainerLow,
-    borderRadius: 16,
-    padding: 16,
-    fontFamily: Theme.typography.bodySemiBold,
-    fontSize: 16,
-    color: Theme.colors.onSurface,
-    marginBottom: 16,
-  },
-  inputRow: {
-    flexDirection: 'row',
-  },
+
   catChip: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    backgroundColor: Theme.colors.surfaceContainerHighest,
-    borderRadius: 16,
-    marginRight: 8,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 24,
+    backgroundColor: Theme.colors.surfaceContainerLow,
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: Theme.colors.outlineVariant + '60',
   },
   catChipActive: {
     backgroundColor: Theme.colors.primary,
+    borderColor: Theme.colors.primary,
+    elevation: 4,
+    shadowColor: Theme.colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
   },
   catChipText: {
     fontFamily: Theme.typography.bodyBold,
-    color: Theme.colors.primary,
     fontSize: 13,
+    color: Theme.colors.onSurfaceVariant,
   },
   catChipTextActive: {
     color: '#FFF',
@@ -1599,12 +1772,11 @@ const styles = StyleSheet.create({
   },
   scannerHint: {
     fontFamily: Theme.typography.bodyBold,
-    color: Theme.colors.onSurface,
+    color: '#FFF',
     fontSize: 14,
-    backgroundColor: 'transparent',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 20,
+    textAlign: 'center',
+    paddingBottom: 20,
+    backgroundColor: 'rgba(0,0,0,0.7)',
   },
   closeScannerBtn: {
     backgroundColor: 'rgba(255,255,255,0.2)',
@@ -1642,64 +1814,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     backgroundColor: 'rgba(255,255,255,0.05)',
   },
-  modalActions: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 8,
-  },
-  cancelBtn: {
-    flex: 1,
-    height: 56,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: Theme.colors.surfaceContainerHighest,
-  },
-  cancelBtnText: {
-    fontFamily: Theme.typography.bodyBold,
-    color: Theme.colors.onSurface,
-  },
-  saveBtn: {
-    backgroundColor: Theme.colors.primary,
-    height: 56,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  saveBtnText: {
-    fontFamily: Theme.typography.bodyBold,
-    color: '#FFF',
-    fontSize: 16,
-  },
-  deleteDesc: {
-    fontFamily: Theme.typography.bodyMedium,
-    fontSize: 15,
-    color: Theme.colors.onSurfaceVariant,
-    textAlign: 'center',
-    lineHeight: 22,
-    marginBottom: 24,
-  },
-  errorInput: {
-    borderWidth: 1.5,
-    borderColor: Theme.colors.tertiary,
-  },
-  insightBox: {
-    backgroundColor: Theme.colors.primaryContainer + '30',
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 20,
-  },
-  insightRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 4,
-  },
-  insightText: {
-    fontFamily: Theme.typography.bodyBold,
-    fontSize: 12,
-    color: Theme.colors.primary,
-  },
+
   logDetailBasic: {
     alignItems: 'center',
     paddingVertical: 20,
@@ -1793,7 +1908,7 @@ const styles = StyleSheet.create({
   alertBtn: {
     width: '100%',
     paddingVertical: 16,
-    borderRadius: 16,
+    borderRadius: 28,
     alignItems: 'center',
   },
   alertBtnText: {

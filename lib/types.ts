@@ -5,6 +5,7 @@ export type Product = {
   packPrice?: number;
   piecesPerPack?: number;
   costPrice?: number;
+  costPerPack?: number;
   unit?: string;
   stock: number;
   lowStockThreshold: number;
@@ -34,6 +35,7 @@ export type Transaction = {
 export type UtangRecord = {
   id: string;
   customerName: string;
+  location?: string;
   amount: number;
   items?: TransactionItem[];
   note?: string;
@@ -57,10 +59,19 @@ export type RestockLog = {
   isBulk?: boolean;
 };
 
+export type Expense = {
+  id: string;
+  description: string;
+  amount: number;
+  category: string;
+  timestamp: string;
+};
+
 export type BusinessSettings = {
   gcashQrUri?: string;
   storeName?: string;
   scannerBeep?: boolean;
   scannerVibrate?: boolean;
   enableBulkMode?: boolean;
+  customCategories?: string[];
 };

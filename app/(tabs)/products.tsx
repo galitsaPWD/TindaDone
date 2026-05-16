@@ -16,7 +16,8 @@ import {
   ActionSheetIOS,
   Vibration
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
 import { 
   Search, 
@@ -31,23 +32,30 @@ import {
   TrendingUp,
   CheckCircle2,
   Info,
-  Tag
+  Tag,
+  Settings
 } from 'lucide-react-native';
 import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Audio } from 'expo-av';
-import { getProducts, addProduct, CATEGORIES } from '../../lib/storage';
+import { getProducts, addProduct, DEFAULT_CATEGORIES } from '../../lib/storage';
 import { useSettings } from '../../context/SettingsContext';
 import { Product, BusinessSettings } from '../../lib/types';
 import { Theme } from '../../constants/Theme';
+import { useTintin } from '../../context/TintinContext';
 
 const { width, height } = Dimensions.get('window');
 
 export default function ProductsScreen() {
+  const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { filter } = useLocalSearchParams();
-  const { businessSettings } = useSettings();
+  const { filter, action } = useLocalSearchParams();
+  const { businessSettings, setIsSettingsOpen } = useSettings();
+  const categories = React.useMemo(() => businessSettings.customCategories || DEFAULT_CATEGORIES, [businessSettings.customCategories]);
+  const categoriesWithAll = React.useMemo(() => ['All', ...categories], [categories]);
+  const tintin = useTintin();
+  const [activeCategory, setActiveCategory] = useState('All');
   const [products, setProducts] = useState<Product[]>([]);
   const [filteredProducts, setFilteredProducts] = useState<Product[]>([]);
   const [search, setSearch] = useState('');
@@ -58,7 +66,7 @@ export default function ProductsScreen() {
   const [name, setName] = useState('');
   const [price, setPrice] = useState('');
   const [costPrice, setCostPrice] = useState('');
-  const [category, setCategory] = useState('Others');
+  const [category, setCategory] = useState(categories.includes('Others') ? 'Others' : (categories[categories.length - 1] || 'Others'));
   const [unit, setUnit] = useState('pc');
   const [threshold, setThreshold] = useState('5');
   const [barcode, setBarcode] = useState('');
@@ -103,6 +111,9 @@ export default function ProductsScreen() {
         if (filter === 'lowStock') {
           setIsLowStockFilterExplicitlyActive(true);
         }
+        if (action === 'add') {
+          setModalVisible(true);
+        }
       });
       return () => {
         task.cancel();
@@ -115,6 +126,16 @@ export default function ProductsScreen() {
 
   useEffect(() => {
     let filtered = products;
+
+    // Apply Category filter
+    if (activeCategory !== 'All') {
+      filtered = filtered.filter(p => {
+        const itemCat = p.category || 'Others';
+        if (itemCat === activeCategory) return true;
+        // Flexible match for Other/Others variations
+        return itemCat.toLowerCase().startsWith('other') && activeCategory.toLowerCase().startsWith('other');
+      });
+    }
 
     // Apply Low Stock filter if explicitly active
     if (isLowStockFilterExplicitlyActive) {
@@ -134,7 +155,7 @@ export default function ProductsScreen() {
     const lowCount = products.filter(p => p.stock <= p.lowStockThreshold).length;
     setTotalValue(total);
     setLowStockCount(lowCount);
-  }, [search, products, isLowStockFilterExplicitlyActive]);
+  }, [search, products, isLowStockFilterExplicitlyActive, activeCategory]);
 
   const loadProducts = async () => {
     const data = await getProducts();
@@ -235,9 +256,9 @@ export default function ProductsScreen() {
       setModalVisible(false);
       resetForm();
       loadProducts();
-      showAlert('Success', `${newProduct.name} registered!`, 'success');
+      tintin.say(`${newProduct.name} registered!`, 'success');
     } catch (e) {
-      showAlert('Error', 'Failed to save product. The image might be too large.', 'error');
+      tintin.say('Failed to save product.', 'error');
     }
   };
 
@@ -399,35 +420,57 @@ export default function ProductsScreen() {
     <TouchableOpacity 
       style={styles.productCard} 
       onPress={() => router.push({ pathname: '/product/[id]', params: { id: item.id } })}
+      activeOpacity={0.7}
     >
-      <View style={styles.productImageContainer}>
+      <View style={styles.cardImageContainer}>
         {item.photoUri ? (
-          <Image source={{ uri: item.photoUri }} style={styles.productImage} />
+          <Image source={{ uri: item.photoUri }} style={styles.cardImage} />
         ) : (
           <View style={styles.letterPlaceholder}>
             <Text style={styles.letterText}>{item.name.charAt(0).toUpperCase()}</Text>
           </View>
         )}
+        {item.stock <= item.lowStockThreshold && (
+          <View style={styles.cardLowStockBadge}>
+            <AlertTriangle size={8} color="#FFF" />
+          </View>
+        )}
       </View>
       <View style={styles.productInfo}>
         <View style={styles.productHeader}>
+          <Text style={styles.productCategory}>{item.category || 'General'}</Text>
           <Text style={styles.productName} numberOfLines={1}>{item.name}</Text>
-          {item.stock <= item.lowStockThreshold && (
-            <View style={styles.lowStockBadge}>
-              <Text style={styles.lowStockBadgeText}>Low</Text>
-            </View>
-          )}
         </View>
-        <Text style={styles.productMeta}>
-          ₱{item.price.toFixed(0)} • {item.category || 'General'} • {item.stock} {item.unit || 'pc'}
-        </Text>
+        <View style={styles.productFooter}>
+          <Text style={styles.productPrice}>₱{item.price.toFixed(0)}</Text>
+          <View style={styles.stockStatus}>
+            <View style={[styles.stockIndicator, { backgroundColor: item.stock <= item.lowStockThreshold ? Theme.colors.tertiary : Theme.colors.primary }]} />
+            <Text style={[styles.stockText, item.stock <= item.lowStockThreshold && { color: Theme.colors.tertiary }]}>
+              {item.stock} {item.unit || 'pc'}
+            </Text>
+          </View>
+        </View>
       </View>
-      <ChevronRight size={18} color={Theme.colors.outlineVariant} />
+      <View style={styles.chevronContainer}>
+        <ChevronRight size={18} color={Theme.colors.outlineVariant} />
+      </View>
     </TouchableOpacity>
   );
 
   return (
     <SafeAreaView style={styles.container}>
+      <View style={styles.boutiqueHeader}>
+        <View>
+          <Text style={styles.boutiqueTitle}>Inventory</Text>
+          <Text style={styles.boutiqueSubtitle}>Digital Stockroom</Text>
+        </View>
+        <TouchableOpacity 
+          style={styles.settingsHeaderBtn} 
+          onPress={() => setIsSettingsOpen(true)}
+        >
+          <Settings size={22} color={Theme.colors.primary} />
+        </TouchableOpacity>
+      </View>
 
       <FlatList
         data={filteredProducts}
@@ -437,18 +480,19 @@ export default function ProductsScreen() {
           <>
             <View style={styles.statsContainer}>
               <View style={styles.mainStatCard}>
-                <View>
-                  <Text style={styles.statLabel}>Total Stock Value</Text>
+                <View style={styles.statInfo}>
+                  <Text style={styles.statLabel}>Total Inventory Value</Text>
                   <Text style={styles.statValue}>₱{totalValue.toLocaleString()}</Text>
                 </View>
-                <View style={styles.statBadges}>
-                  <View style={styles.statBadge}>
-                    <Text style={styles.statBadgeText}>{products.length} Items</Text>
+                <View style={styles.statRow}>
+                  <View style={styles.statPill}>
+                    <Package size={14} color={Theme.colors.onPrimaryContainer} />
+                    <Text style={styles.statPillText}>{products.length} Products</Text>
                   </View>
                   {lowStockCount > 0 && (
-                    <View style={[styles.statBadge, { backgroundColor: Theme.colors.tertiaryContainer }]}>
-                      <AlertTriangle size={12} color={Theme.colors.onTertiaryContainer} style={{ marginRight: 4 }} />
-                      <Text style={[styles.statBadgeText, { color: Theme.colors.onTertiaryContainer }]}>{lowStockCount} Low</Text>
+                    <View style={[styles.statPill, { backgroundColor: Theme.colors.tertiaryContainer }]}>
+                      <AlertTriangle size={14} color={Theme.colors.onTertiaryContainer} />
+                      <Text style={[styles.statPillText, { color: Theme.colors.onTertiaryContainer }]}>{lowStockCount} Critical</Text>
                     </View>
                   )}
                 </View>
@@ -473,18 +517,32 @@ export default function ProductsScreen() {
         </View>
       )}
 
-      <View style={styles.searchSection}>
-              <View style={styles.searchBar}>
-                <Search size={20} color={Theme.colors.outline} />
-                <TextInput
-                  style={styles.searchInput}
-                  placeholder="Search products or categories..."
-                  placeholderTextColor={Theme.colors.outlineVariant}
-                  value={search}
-                  onChangeText={setSearch}
-                />
-              </View>
-            </View>
+      <View style={styles.categoriesSection}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoriesContent}>
+          {categoriesWithAll.map((c, idx) => (
+            <TouchableOpacity 
+              key={`${c}-${idx}`}
+              style={[styles.catFilterChip, activeCategory === c && styles.catFilterChipActive]}
+              onPress={() => setActiveCategory(c)}
+            >
+              <Text style={[styles.catFilterChipText, activeCategory === c && styles.catFilterChipTextActive]}>{c}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      </View>
+
+        <View style={styles.searchSection}>
+          <View style={styles.searchBar}>
+            <Search size={20} color={Theme.colors.outline} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search products or categories..."
+              placeholderTextColor={Theme.colors.outlineVariant}
+              value={search}
+              onChangeText={setSearch}
+            />
+          </View>
+        </View>
           </>
         }
         contentContainerStyle={styles.listContent}
@@ -499,16 +557,18 @@ export default function ProductsScreen() {
       <TouchableOpacity 
         style={styles.fab} 
         onPress={() => setModalVisible(true)}
+        activeOpacity={0.8}
       >
-        <Plus size={28} color="#FFF" />
+        <Plus size={32} color="#FFF" strokeWidth={3} />
       </TouchableOpacity>
 
       {/* Add Product Modal */}
       <Modal visible={modalVisible} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <View style={styles.sheetContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Add New Product</Text>
+        <BlurView intensity={100} tint="light" style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalIndicator} />
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Add New Product</Text>
               <TouchableOpacity onPress={() => setModalVisible(false)}>
                 <X size={24} color={Theme.colors.outline} />
               </TouchableOpacity>
@@ -734,7 +794,7 @@ export default function ProductsScreen() {
 
             <Text style={styles.inputLabel}>CATEGORY</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
-              {CATEGORIES.map(c => (
+              {categories.map(c => (
                 <TouchableOpacity 
                   key={c} 
                   style={[styles.catChip, category === c && styles.catChipActive]}
@@ -788,7 +848,8 @@ export default function ProductsScreen() {
             </TouchableOpacity>
           </ScrollView>
         </View>
-      </View>
+      </BlurView>
+    </Modal>
 
         {/* Inner Barcode Scanner Modal */}
         <Modal visible={isScanning} transparent animationType="fade">
@@ -799,23 +860,37 @@ export default function ProductsScreen() {
               barcodeScannerSettings={{
                 barcodeTypes: ["qr", "ean13", "ean8", "upc_a", "upc_e", "code128", "code39", "itf14"],
               }}
-            />
-            <View style={styles.scannerHUDOverlay}>
-              <SafeAreaView style={styles.scannerHUDHeaderInModal}>
-                <Text style={styles.scannerHUDTitleInModal}>Register Barcode</Text>
-                <TouchableOpacity onPress={() => setIsScanning(false)} style={{ padding: 12 }}>
-                  <X size={32} color="#FFF" />
-                </TouchableOpacity>
-              </SafeAreaView>
-              <View style={styles.scannerCrosshair} />
-              <View style={styles.scannerControls}>
-                <Text style={styles.scannerHint}>Align barcode within the frame</Text>
+            >
+              {/* Close Button Top Right */}
+              <TouchableOpacity 
+                onPress={() => setIsScanning(false)} 
+                style={[styles.closeScannerTopBtn, { top: Math.max(insets.top, 20) }]}
+              >
+                <X size={28} color="#FFF" strokeWidth={3} />
+              </TouchableOpacity>
+
+              {/* Centered Scanner HUD */}
+              <View style={styles.scannerHUDOverlay}>
+                <View style={styles.scannerCrosshair}>
+                   <View style={styles.scannerCornerTL} />
+                   <View style={styles.scannerCornerTR} />
+                   <View style={styles.scannerCornerBL} />
+                   <View style={styles.scannerCornerBR} />
+                </View>
+                
+                <View style={styles.scannerHUDContent}>
+                  <Text style={styles.scannerHUDTitle}>Auto-Detecting Barcode...</Text>
+                  <Text style={styles.scannerHUDHint}>Align barcode within the frame</Text>
+                </View>
+              </View>
+
+              <View style={styles.scannerFooter}>
                 <Text style={styles.lightingHint}>Tip: Ensure good lighting for better accuracy</Text>
               </View>
-            </View>
+            </CameraView>
           </View>
         </Modal>
-      </Modal>
+
 
       {/* Custom Alert Modal */}
       <Modal visible={alertVisible} transparent animationType="fade">
@@ -853,6 +928,33 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Theme.colors.background,
   },
+  boutiqueHeader: {
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 8,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  settingsHeaderBtn: {
+    padding: 8,
+    backgroundColor: Theme.colors.surfaceContainerHigh,
+    borderRadius: 12,
+  },
+  boutiqueTitle: {
+    fontFamily: Theme.typography.headlineBlack,
+    fontSize: 34,
+    color: Theme.colors.onSurface,
+    letterSpacing: -1.5,
+  },
+  boutiqueSubtitle: {
+    fontFamily: Theme.typography.bodyBold,
+    fontSize: 12,
+    color: Theme.colors.primary,
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+    opacity: 0.8,
+  },
   customHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -870,95 +972,110 @@ const styles = StyleSheet.create({
     color: Theme.colors.onSurface,
   },
   listContent: {
-    paddingBottom: 110,
+    paddingBottom: 160,
   },
   statsContainer: {
     padding: 16,
   },
   mainStatCard: {
-    backgroundColor: Theme.colors.primaryContainer,
+    backgroundColor: Theme.colors.primary,
     borderRadius: 24,
     padding: 24,
     minHeight: 150,
     justifyContent: 'space-between',
   },
+  statInfo: {
+    marginBottom: 20,
+  },
   statLabel: {
     fontFamily: Theme.typography.bodyBold,
-    color: Theme.colors.onPrimaryContainer,
-    opacity: 0.8,
-    fontSize: 14,
+    fontSize: 12,
+    color: '#FFF',
+    opacity: 0.7,
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
     marginBottom: 4,
   },
   statValue: {
     fontFamily: Theme.typography.headlineBlack,
-    color: Theme.colors.onPrimaryContainer,
-    fontSize: 32,
+    fontSize: 36,
+    color: '#FFF',
+    letterSpacing: -1,
   },
-  statBadges: {
+  statRow: {
     flexDirection: 'row',
-    gap: 8,
-    marginTop: 12,
+    gap: 10,
   },
-  statBadge: {
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
+  statPill: {
     flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    gap: 6,
   },
-  statBadgeText: {
+  statPillText: {
     fontFamily: Theme.typography.bodyBold,
-    color: Theme.colors.onPrimaryContainer,
     fontSize: 12,
+    color: '#FFF',
   },
   searchSection: {
-    paddingHorizontal: 16,
-    marginBottom: 16,
+    paddingHorizontal: 20,
+    paddingVertical: 16,
   },
   searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Theme.colors.surfaceContainerLow,
-    borderRadius: 16,
+    backgroundColor: Theme.colors.surfaceContainerLowest,
+    borderRadius: 28, // Perfect pill for height 56
     paddingHorizontal: 16,
-    height: 52,
+    height: 56,
+    borderWidth: 1.5,
+    borderColor: Theme.colors.outlineVariant,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.03,
+    shadowRadius: 5,
+    elevation: 1,
   },
   searchInput: {
     flex: 1,
     marginLeft: 12,
-    fontFamily: Theme.typography.bodyMedium,
-    fontSize: 16,
+    fontFamily: Theme.typography.bodySemiBold,
+    fontSize: 15,
     color: Theme.colors.onSurface,
   },
   productCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Theme.colors.surfaceContainerLowest,
+    backgroundColor: '#FFF',
     marginHorizontal: 16,
-    marginBottom: 8,
-    padding: 12,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: Theme.colors.outlineVariant + '20',
+    marginBottom: 12,
+    padding: 14,
+    borderRadius: 32,
+    borderWidth: 1.5,
+    borderColor: Theme.colors.outlineVariant + '40',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.03,
+    shadowRadius: 12,
+    elevation: 2,
   },
-  productImageContainer: {
-    width: 60,
-    height: 60,
-    backgroundColor: Theme.colors.surfaceContainerHigh,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
+  cardImageContainer: {
+    width: 72,
+    height: 72,
+    borderRadius: 24,
     overflow: 'hidden',
+    backgroundColor: Theme.colors.surfaceContainerLow,
+    position: 'relative',
   },
-  productImage: {
+  cardImage: {
     width: '100%',
     height: '100%',
   },
   letterPlaceholder: {
-    width: '100%',
-    height: '100%',
+    flex: 1,
     backgroundColor: Theme.colors.secondaryContainer,
     justifyContent: 'center',
     alignItems: 'center',
@@ -966,42 +1083,83 @@ const styles = StyleSheet.create({
   letterText: {
     fontFamily: Theme.typography.headlineBlack,
     color: Theme.colors.onSecondaryContainer,
-    fontSize: 24,
+    fontSize: 28,
+  },
+  cardLowStockBadge: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    backgroundColor: Theme.colors.tertiary,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#FFF',
   },
   productInfo: {
     flex: 1,
+    marginLeft: 16,
+    justifyContent: 'center',
   },
   productHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+    marginBottom: 4,
+  },
+  productCategory: {
+    fontFamily: Theme.typography.bodyBold,
+    fontSize: 10,
+    color: Theme.colors.primary,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: 2,
   },
   productName: {
-    fontFamily: Theme.typography.headline,
+    fontFamily: Theme.typography.bodyBold,
     fontSize: 16,
     color: Theme.colors.onSurface,
   },
-  lowStockBadge: {
-    backgroundColor: Theme.colors.tertiary,
-    paddingHorizontal: 6,
+  productFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  productPrice: {
+    fontFamily: Theme.typography.headlineBlack,
+    fontSize: 18,
+    color: Theme.colors.onSurface,
+  },
+  stockStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: Theme.colors.surfaceContainerLow,
+    paddingHorizontal: 8,
     paddingVertical: 2,
-    borderRadius: 4,
+    borderRadius: 8,
   },
-  lowStockBadgeText: {
-    color: '#FFF',
-    fontSize: 10,
+  stockIndicator: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  stockText: {
     fontFamily: Theme.typography.bodyBold,
-    textTransform: 'uppercase',
-  },
-  productMeta: {
-    fontFamily: Theme.typography.bodyMedium,
-    fontSize: 13,
+    fontSize: 11,
     color: Theme.colors.onSurfaceVariant,
-    marginTop: 2,
+  },
+  chevronContainer: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: Theme.colors.surfaceContainerLow,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 8,
   },
   fab: {
     position: 'absolute',
-    bottom: 24,
+    bottom: 120, // Raised to clear floating tab bar
     right: 24,
     backgroundColor: Theme.colors.primary,
     width: 64,
@@ -1010,6 +1168,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     elevation: 8,
+    shadowColor: Theme.colors.primary,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 15,
+    zIndex: 99,
   },
   emptyContainer: {
     padding: 100,
@@ -1057,7 +1220,7 @@ const styles = StyleSheet.create({
   alertBtn: {
     width: '100%',
     paddingVertical: 16,
-    borderRadius: 16,
+    borderRadius: 28, // Pill shape
     alignItems: 'center',
   },
   alertBtnText: {
@@ -1071,13 +1234,27 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
     justifyContent: 'flex-end',
   },
-  sheetContent: {
-    backgroundColor: Theme.colors.surface,
+  modalContent: {
+    backgroundColor: Theme.colors.surface, // Solid focus
     borderTopLeftRadius: 32,
     borderTopRightRadius: 32,
     padding: 24,
-    minHeight: height * 0.85,
+    minHeight: height * 0.85, // Restored height so it goes 'up'
     maxHeight: '90%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -20 },
+    shadowOpacity: 0.1,
+    shadowRadius: 30,
+    elevation: 20,
+  },
+  modalIndicator: {
+    width: 40,
+    height: 5,
+    backgroundColor: Theme.colors.outlineVariant,
+    borderRadius: 3,
+    alignSelf: 'center',
+    marginBottom: 20,
+    opacity: 0.5,
   },
   modalHeader: {
     flexDirection: 'row',
@@ -1088,30 +1265,32 @@ const styles = StyleSheet.create({
   typeSelector: {
     flexDirection: 'row',
     backgroundColor: Theme.colors.surfaceContainerLow,
-    borderRadius: 16,
-    padding: 4,
+    borderRadius: 32,
+    padding: 6,
     marginBottom: 24,
+    borderWidth: 1,
+    borderColor: Theme.colors.outlineVariant + '40',
   },
   typeBtn: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 10,
-    borderRadius: 12,
+    paddingVertical: 12,
+    borderRadius: 26,
     gap: 8,
   },
   typeBtnActive: {
     backgroundColor: Theme.colors.primary,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
+    elevation: 4,
+    shadowColor: Theme.colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
   },
   typeBtnText: {
     fontFamily: Theme.typography.bodyBold,
-    fontSize: 13,
+    fontSize: 14,
     color: Theme.colors.outline,
   },
   typeBtnTextActive: {
@@ -1173,19 +1352,27 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
   },
   catChip: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    backgroundColor: Theme.colors.surfaceContainerHighest,
-    borderRadius: 16,
-    marginRight: 8,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 24,
+    backgroundColor: Theme.colors.surfaceContainerLow,
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: Theme.colors.outlineVariant + '60',
   },
   catChipActive: {
     backgroundColor: Theme.colors.primary,
+    borderColor: Theme.colors.primary,
+    elevation: 4,
+    shadowColor: Theme.colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
   },
   catChipText: {
     fontFamily: Theme.typography.bodyBold,
-    color: Theme.colors.primary,
     fontSize: 13,
+    color: Theme.colors.onSurfaceVariant,
   },
   catChipTextActive: {
     color: '#FFF',
@@ -1239,7 +1426,7 @@ const styles = StyleSheet.create({
   },
   scannerControls: {
     position: 'absolute',
-    bottom: 40,
+    bottom: 120, // Raised to clear floating tab bar
     left: 0,
     right: 0,
     alignItems: 'center',
@@ -1262,52 +1449,77 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  closeScannerTopBtn: {
+    position: 'absolute',
+    right: 20,
+    zIndex: 100,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   scannerHUDOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    flex: 1,
     backgroundColor: 'transparent',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  scannerHUDHeaderInModal: {
-    position: 'absolute',
-    top: 50,
-    left: 20,
-    right: 20,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+  scannerCrosshair: {
+    width: 260,
+    height: 160,
+    position: 'relative',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderRadius: 20,
+  },
+  scannerCornerTL: { position: 'absolute', top: -2, left: -2, width: 30, height: 30, borderTopWidth: 4, borderLeftWidth: 4, borderColor: Theme.colors.primary, borderTopLeftRadius: 20 },
+  scannerCornerTR: { position: 'absolute', top: -2, right: -2, width: 30, height: 30, borderTopWidth: 4, borderRightWidth: 4, borderColor: Theme.colors.primary, borderTopRightRadius: 20 },
+  scannerCornerBL: { position: 'absolute', bottom: -2, left: -2, width: 30, height: 30, borderBottomWidth: 4, borderLeftWidth: 4, borderColor: Theme.colors.primary, borderBottomLeftRadius: 20 },
+  scannerCornerBR: { position: 'absolute', bottom: -2, right: -2, width: 30, height: 30, borderBottomWidth: 4, borderRightWidth: 4, borderColor: Theme.colors.primary, borderBottomRightRadius: 20 },
+  scannerHUDContent: {
+    marginTop: 40,
     alignItems: 'center',
   },
-  scannerHUDTitleInModal: {
-    color: Theme.colors.onSurface,
+  scannerHUDTitle: {
     fontFamily: Theme.typography.headlineBlack,
-    fontSize: 20,
+    color: '#FFF',
+    fontSize: 18,
+    marginBottom: 4,
   },
-  scannerCrosshair: {
-    width: 250,
-    height: 150,
-    borderWidth: 2,
-    borderColor: Theme.colors.primary,
-    borderRadius: 16,
-    backgroundColor: 'rgba(255,255,255,0.05)',
+  scannerHUDHint: {
+    fontFamily: Theme.typography.bodyBold,
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 12,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  scannerFooter: {
+    position: 'absolute',
+    bottom: 120,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
   },
   insightBox: {
     backgroundColor: Theme.colors.surfaceContainerLow,
-    borderRadius: 20,
-    padding: 16,
+    borderRadius: 24,
+    padding: 20,
     marginBottom: 24,
     borderWidth: 1,
-    borderColor: Theme.colors.outlineVariant + '20',
+    borderColor: Theme.colors.outlineVariant,
   },
   insightRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    marginBottom: 4,
+    gap: 12,
+    marginBottom: 8,
   },
   insightText: {
-    fontFamily: Theme.typography.bodyBold,
-    fontSize: 12,
-    color: Theme.colors.primary,
+    fontFamily: Theme.typography.bodySemiBold,
+    fontSize: 13,
+    color: Theme.colors.onSurfaceVariant,
+    flex: 1,
   },
   lightingHint: {
     fontFamily: Theme.typography.bodyBold,
@@ -1357,5 +1569,37 @@ const styles = StyleSheet.create({
     fontFamily: Theme.typography.bodyBold,
     color: Theme.colors.primary,
     fontSize: 13,
+  },
+  categoriesSection: {
+    backgroundColor: Theme.colors.surface,
+    paddingVertical: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: Theme.colors.surfaceVariant,
+  },
+  categoriesContent: {
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+  },
+  catFilterChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: Theme.colors.surfaceVariant + '40',
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: Theme.colors.surfaceVariant,
+  },
+  catFilterChipActive: {
+    backgroundColor: Theme.colors.primary,
+    borderColor: Theme.colors.primary,
+  },
+  catFilterChipText: {
+    fontFamily: Theme.typography.bodyMedium,
+    fontSize: 13,
+    color: Theme.colors.onSurfaceVariant,
+  },
+  catFilterChipTextActive: {
+    color: Theme.colors.onPrimary,
+    fontFamily: Theme.typography.bodyBold,
   },
 });

@@ -3,12 +3,13 @@ import * as Crypto from 'expo-crypto';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Platform } from 'react-native';
-import { Product, Transaction, TransactionItem, UtangRecord, RestockLog, BusinessSettings } from './types';
+import { Product, Transaction, TransactionItem, UtangRecord, RestockLog, BusinessSettings, Expense } from './types';
 
 const PRODUCTS_KEY = '@tindadone/products';
 const TRANSACTIONS_KEY = '@tindadone/transactions';
 const UTANG_KEY = '@tindadone/utang';
 const RESTOCKS_KEY = '@tindadone/restocks';
+const EXPENSES_KEY = '@tindadone/expenses';
 const SETTINGS_KEY = '@tindadone/settings';
 const WELCOME_KEY = '@tindadone/welcome_seen';
 const PIN_KEY = '@tindadone/pin';
@@ -96,7 +97,8 @@ async function getMonthIndex(): Promise<string[]> {
   }
 }
 
-export const CATEGORIES = ['Food', 'Drinks', 'Personal Care', 'Household', 'Others'];
+export const DEFAULT_CATEGORIES = ['Food', 'Drinks', 'Personal Care', 'Household', 'Others'];
+export const CATEGORIES = DEFAULT_CATEGORIES; // For backward compatibility in legacy code
 
 const PRESET_PRODUCTS: Array<{name: string, price: number, category: string}> = [];
 
@@ -277,6 +279,82 @@ export async function getTodaysTransactions(): Promise<Transaction[]> {
     return transactions.filter((t) => t.timestamp.startsWith(today));
   } catch {
     return [];
+  }
+}
+
+export async function voidTransaction(id: string): Promise<void> {
+  try {
+    const index = await getMonthIndex();
+    let foundTrans: Transaction | null = null;
+    let foundMK: string | null = null;
+
+    // Search partitions
+    for (const mk of index) {
+      const key = getPartitionKey(mk);
+      const raw = await AsyncStorage.getItem(key);
+      if (raw) {
+        const trans: Transaction[] = JSON.parse(raw);
+        const t = trans.find(tr => tr.id === id);
+        if (t) {
+          foundTrans = t;
+          foundMK = mk;
+          break;
+        }
+      }
+    }
+
+    if (!foundTrans || !foundMK) return;
+
+    // 1. Restore Stock
+    const products = await getProducts();
+    foundTrans.items.forEach(item => {
+      const p = products.find(prod => prod.id === item.productId);
+      if (p) {
+        const restoration = item.isPack ? item.qty * (p.piecesPerPack || 1) : item.qty;
+        p.stock += restoration;
+      }
+    });
+    await saveProducts(products);
+
+    // 2. Remove from storage
+    const key = getPartitionKey(foundMK);
+    const raw = await AsyncStorage.getItem(key);
+    const trans: Transaction[] = raw ? JSON.parse(raw) : [];
+    const filtered = trans.filter(t => t.id !== id);
+    
+    if (filtered.length === 0) {
+      // Remove empty partition and update index
+      await AsyncStorage.removeItem(key);
+      const updatedIndex = index.filter(m => m !== foundMK);
+      await AsyncStorage.setItem(TRANSACTION_MONTHS_KEY, JSON.stringify(updatedIndex));
+    } else {
+      await AsyncStorage.setItem(key, JSON.stringify(filtered));
+    }
+  } catch (e) {
+    console.error('Error voiding transaction:', e);
+    throw e;
+  }
+}
+
+export async function updateTransactionPayment(id: string, type: 'cash' | 'gcash'): Promise<void> {
+  try {
+    const index = await getMonthIndex();
+    for (const mk of index) {
+      const key = getPartitionKey(mk);
+      const raw = await AsyncStorage.getItem(key);
+      if (raw) {
+        const trans: Transaction[] = JSON.parse(raw);
+        const tIdx = trans.findIndex(tr => tr.id === id);
+        if (tIdx !== -1) {
+          trans[tIdx].paymentType = type;
+          await AsyncStorage.setItem(key, JSON.stringify(trans));
+          return;
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Error updating transaction payment:', e);
+    throw e;
   }
 }
 
@@ -466,6 +544,38 @@ export async function addRestockLog(log: RestockLog): Promise<void> {
   if (p) {
     p.stock += log.qtyAdded;
     await saveProducts(products);
+  }
+}
+
+// Expenses
+export async function getExpenses(): Promise<Expense[]> {
+  try {
+    const raw = await AsyncStorage.getItem(EXPENSES_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    console.error('Error fetching expenses:', e);
+    return [];
+  }
+}
+
+export async function addExpense(expense: Expense): Promise<void> {
+  try {
+    const expenses = await getExpenses();
+    expenses.unshift(expense);
+    await AsyncStorage.setItem(EXPENSES_KEY, JSON.stringify(expenses));
+  } catch (e) {
+    console.error('Error adding expense:', e);
+    throw e;
+  }
+}
+
+export async function deleteExpense(id: string): Promise<void> {
+  try {
+    const expenses = await getExpenses();
+    const filtered = expenses.filter(e => e.id !== id);
+    await AsyncStorage.setItem(EXPENSES_KEY, JSON.stringify(filtered));
+  } catch (e) {
+    console.error('Error deleting expense:', e);
   }
 }
 

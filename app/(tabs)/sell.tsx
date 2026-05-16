@@ -14,9 +14,11 @@ import {
   ScrollView,
   InteractionManager,
   Platform,
-  Vibration
+  Vibration,
+  LayoutAnimation
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { BlurView } from 'expo-blur';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { 
   Audio,
   InterruptionModeAndroid,
@@ -43,25 +45,91 @@ import {
   Info,
   Package,
   Tag,
-  ArrowRightLeft
+  ArrowRightLeft,
+  ShoppingBag,
+  Settings
 } from 'lucide-react-native';
-import Animated, { SlideInDown, SlideOutDown, FadeInDown } from 'react-native-reanimated';
+import Animated, { 
+  SlideInDown, 
+  SlideOutDown, 
+  FadeInDown, 
+  FadeOutDown,
+  FadeIn,
+  FadeOut,
+  ZoomIn,
+  ZoomOut,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withSequence,
+  withTiming
+} from 'react-native-reanimated';
+import DraggableFlatList, { ScaleDecorator, OpacityDecorator, ShadowDecorator } from 'react-native-draggable-flatlist';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { getTransactions, getProducts, saveTransaction, hasSeenWelcome, markWelcomeAsSeen, saveBusinessSettings, addUtangRecord } from '../../lib/storage';
+import { getTransactions, getProducts, saveTransaction, hasSeenWelcome, markWelcomeAsSeen, saveBusinessSettings, addUtangRecord, getUtangRecords, DEFAULT_CATEGORIES } from '../../lib/storage';
 import { useSettings } from '../../context/SettingsContext';
 import { Product, TransactionItem, BusinessSettings, UtangRecord } from '../../lib/types';
 import { getTopSoldProducts } from '../../lib/calculations';
 import { getTrialStatus, isActivated, syncTrialWithServer, TrialStatus } from '../../lib/license';
 import { Theme } from '../../constants/Theme';
+import { useTintin } from '../../context/TintinContext';
 
 import * as ImagePicker from 'expo-image-picker';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 
 const { width } = Dimensions.get('window');
 
+const DraggableCategoryChip = ({ item, drag, isActive, isDraggingGlobal, activeCategory, setActiveCategory }: any) => {
+  const rotateVal = useSharedValue(0);
+
+  useEffect(() => {
+    if (isDraggingGlobal && !isActive && item !== 'All') {
+      rotateVal.value = withRepeat(
+        withSequence(withTiming(-2, { duration: 100 }), withTiming(2, { duration: 100 })),
+        -1,
+        true
+      );
+    } else {
+      rotateVal.value = withTiming(0, { duration: 150 });
+    }
+  }, [isDraggingGlobal, isActive, item]);
+
+  const jiggleStyle = useAnimatedStyle(() => {
+    return {
+      transform: [{ rotate: `${rotateVal.value}deg` }]
+    };
+  });
+
+  return (
+    <ShadowDecorator>
+      <OpacityDecorator activeOpacity={0.8}>
+        <ScaleDecorator activeScale={1.05}>
+          <Animated.View style={jiggleStyle}>
+            <TouchableOpacity 
+              style={[
+                styles.catChip, 
+                activeCategory === item && styles.catChipActive, 
+                // @ts-ignore
+                Platform.OS === 'web' && { cursor: isActive ? 'grabbing' : 'grab', touchAction: 'none' }
+              ]}
+              onPress={() => setActiveCategory(item)}
+              onLongPress={drag}
+              delayLongPress={300}
+            >
+              <Text style={[styles.catChipText, activeCategory === item && styles.catChipTextActive]}>{item}</Text>
+            </TouchableOpacity>
+          </Animated.View>
+        </ScaleDecorator>
+      </OpacityDecorator>
+    </ShadowDecorator>
+  );
+};
+
 export default function SellScreen() {
+  const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { businessSettings, updateSettings } = useSettings();
+  const { businessSettings, updateSettings, setIsSettingsOpen } = useSettings();
+  const tintin = useTintin();
   const [products, setProducts] = useState<Product[]>([]);
   const [filteredProducts, setFilteredProducts] = useState<Product[]>([]);
   const [cart, setCart] = useState<TransactionItem[]>([]);
@@ -76,11 +144,20 @@ export default function SellScreen() {
     title: string;
     message: string;
     type: 'success' | 'error' | 'warning' | 'info';
+    showCancel?: boolean;
+    confirmText?: string;
     onConfirm?: () => void;
   }>({ title: '', message: '', type: 'info' });
 
-  const showAlert = (title: string, message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info', onConfirm?: () => void) => {
-    setAlertConfig({ title, message, type, onConfirm });
+  const showAlert = (
+    title: string, 
+    message: string, 
+    type: 'success' | 'error' | 'warning' | 'info' = 'info', 
+    onConfirm?: () => void,
+    showCancel?: boolean,
+    confirmText?: string
+  ) => {
+    setAlertConfig({ title, message, type, onConfirm, showCancel, confirmText });
     setAlertVisible(true);
   };
 
@@ -101,10 +178,20 @@ export default function SellScreen() {
   const [trial, setTrial] = useState<TrialStatus | null>(null);
   const [editingItem, setEditingItem] = useState<TransactionItem | null>(null);
   const [tempQty, setTempQty] = useState('');
+  const [isCartPeeking, setIsCartPeeking] = useState(false);
   
   // Welcome & Settings
   const [showWelcome, setShowWelcome] = useState(false);
   const [storeName, setStoreName] = useState('');
+  
+  // Custom categories state for drag-and-drop
+  const [isDraggingGlobal, setIsDraggingGlobal] = useState(false);
+  const categories = businessSettings.customCategories || DEFAULT_CATEGORIES;
+  const [localCategories, setLocalCategories] = useState(categories);
+  
+  useEffect(() => {
+    setLocalCategories(categories);
+  }, [businessSettings.customCategories, categories]);
   
   // Scanner HUD
   const [isScanningMode, setIsScanningMode] = useState(false);
@@ -190,10 +277,24 @@ export default function SellScreen() {
   };
 
   useEffect(() => {
+    const checkEOD = () => {
+      const hours = new Date().getHours();
+      if (hours >= 18) { // 6 PM
+        tintin.say("It's been a busy day! Ready to generate your Daily Performance report?", 'info');
+      }
+    };
+    checkEOD();
+  }, []);
+
+  useEffect(() => {
     let filtered = products;
 
     if (activeCategory !== 'All') {
-      filtered = filtered.filter(p => (p.category || 'Others') === activeCategory);
+      filtered = filtered.filter(p => {
+        const itemCat = p.category || 'Others';
+        if (itemCat === activeCategory) return true;
+        return itemCat.toLowerCase().startsWith('other') && activeCategory.toLowerCase().startsWith('other');
+      });
     }
 
     if (search !== '') {
@@ -206,13 +307,6 @@ export default function SellScreen() {
     setFilteredProducts(filtered);
   }, [search, products, activeCategory]);
 
-  const categories = [
-    'All',
-    ...Array.from(new Set(products.map(p => p.category || 'Others')))
-      .filter(c => c !== 'Others')
-      .sort(),
-    ...(products.some(p => !p.category || p.category === 'Others') ? ['Others'] : []),
-  ];
 
   const loadProducts = async () => {
     const pData = await getProducts();
@@ -236,12 +330,19 @@ export default function SellScreen() {
   const addToCart = (product: Product) => {
     // PRD: Stock Warning
     if (product.stock <= 0) {
-      showAlert('Low Stock Warning', `Note: "${product.name}" is out of stock. You can still proceed if needed.`, 'warning');
+      tintin.say(`Note: "${product.name}" is out of stock.`, 'warning');
+    } else if (product.stock <= 5) {
+      tintin.say(`Sales are spiking for ${product.name}! It might sell out soon.`, 'info');
     }
 
     setCart(prev => {
       const existing = prev.find(item => item.productId === product.id);
       if (existing) {
+        // Stock Intelligence check
+        if (existing.qty + 1 > product.stock) {
+          tintin.say(`Only ${product.stock} ${product.name} left!`, 'warning');
+          return prev;
+        }
         return prev.map(item => 
           item.productId === product.id ? { ...item, qty: item.qty + 1 } : item
         );
@@ -258,6 +359,9 @@ export default function SellScreen() {
   };
 
   const toggleItemPack = (productId: string) => {
+    if (Platform.OS === 'ios' || Platform.OS === 'android') {
+       LayoutAnimation.configureNext(LayoutAnimation.Presets.spring);
+    }
     setCart(prev => prev.map(item => {
       if (item.productId === productId) {
         const product = products.find(p => p.id === productId);
@@ -288,8 +392,7 @@ export default function SellScreen() {
     if (product) {
       lastScanTime.current = now;
       playBeep();
-      setScanStatus(`Scanned: ${product.name}`);
-      setTimeout(() => setScanStatus(null), 1000);
+      tintin.say(`Added ${product.name}!`, 'success');
       addToCart(product);
     }
   };
@@ -312,7 +415,15 @@ export default function SellScreen() {
   const updateQty = (productId: string, delta: number) => {
     setCart(prev => prev.map(item => {
       if (item.productId === productId) {
+        const product = products.find(p => p.id === productId);
         const newQty = Math.max(0, item.qty + delta);
+        
+        // Stock Intelligence check
+        if (delta > 0 && product && newQty > product.stock) {
+          tintin.say(`Limit reached: ${product.stock} in stock.`, 'warning');
+          return item;
+        }
+        
         return { ...item, qty: newQty };
       }
       return item;
@@ -344,13 +455,14 @@ export default function SellScreen() {
   const handleCheckout = async () => {
     if (cart.length === 0) return;
     
-    // Map cart items to include current cost prices for permanent profit tracking
     const itemsWithCost = cart.map(item => {
       const p = products.find(prod => prod.id === item.productId);
       const baseCost = p?.costPrice || 0;
+      const packCost = p?.costPerPack ? parseFloat(p.costPerPack.toString()) : (baseCost * (p?.piecesPerPack || 1));
+      
       return {
         ...item,
-        costPriceAtSale: item.isPack ? baseCost * (p?.piecesPerPack || 1) : baseCost
+        costPriceAtSale: item.isPack ? packCost : baseCost
       };
     });
 
@@ -366,7 +478,14 @@ export default function SellScreen() {
       await saveTransaction(transaction);
       setCart([]);
       setCheckoutModalVisible(false);
-      showAlert('Success', 'Transaction completed!', 'success');
+      
+      // Feature 4: Boutique Compliments
+      if (total > 2000) {
+        tintin.say(`Wow, a ₱${total.toFixed(0)} sale! Your shop is on fire today! 🔥`, 'success');
+      } else {
+        tintin.say('Sale Complete!', 'success');
+      }
+      
       loadProducts(); // Refresh stocks
     } catch (e: any) {
       showAlert('Unable to Complete Sale', e.message || 'Failed to save transaction.', 'error');
@@ -383,9 +502,11 @@ export default function SellScreen() {
     const itemsWithCost = cart.map(item => {
       const p = products.find(prod => prod.id === item.productId);
       const baseCost = p?.costPrice || 0;
+      const packCost = p?.costPerPack ? parseFloat(p.costPerPack.toString()) : (baseCost * (p?.piecesPerPack || 1));
+      
       return {
         ...item,
-        costPriceAtSale: item.isPack ? baseCost * (p?.piecesPerPack || 1) : baseCost
+        costPriceAtSale: item.isPack ? packCost : baseCost
       };
     });
 
@@ -399,12 +520,24 @@ export default function SellScreen() {
     };
 
     try {
+      // Feature 3: Debt Awareness (Fetch existing debts for this customer)
+      const allUtang = await getUtangRecords();
+      const existingDebt = allUtang
+        .filter(r => r.customerName.toLowerCase() === customerName.trim().toLowerCase() && !r.isPaid)
+        .reduce((sum, r) => sum + r.amount, 0);
+
       await addUtangRecord(utangRecord);
       setCart([]);
       setUtangModalVisible(false);
       setCheckoutModalVisible(false);
       setCustomerName('');
-      showAlert('Success', `Charged ₱${total.toFixed(0)} to ${customerName.trim()}'s Utang.`, 'success');
+      
+      if (existingDebt > 0) {
+        tintin.say(`Charged ₱${total.toFixed(0)}. Heads up! ${customerName.trim()} now has ₱${(existingDebt + total).toFixed(0)} in total unpaid debts.`, 'warning');
+      } else {
+        showAlert('Success', `Charged ₱${total.toFixed(0)} to ${customerName.trim()}'s Utang.`, 'success');
+      }
+      
       loadProducts(); // Refresh stocks for sold items
     } catch (e: any) {
       showAlert('Unable to Create Utang', e.message || 'Failed to save Utang record.', 'error');
@@ -414,9 +547,9 @@ export default function SellScreen() {
   const renderProduct = ({ item, index }: { item: Product, index: number }) => (
     <Animated.View entering={FadeInDown.delay(index * 30).springify()} style={{ flex: 1 }}>
       <TouchableOpacity 
-        style={styles.productCard} 
+        style={[styles.productCard, item.stock <= 0 && styles.productCardDisabled]} 
         onPress={() => addToCart(item)}
-        disabled={item.stock <= 0}
+        activeOpacity={0.8}
       >
         <View style={styles.productImageContainer}>
           {item.photoUri ? (
@@ -426,13 +559,20 @@ export default function SellScreen() {
               <Text style={styles.letterText}>{item.name.charAt(0).toUpperCase()}</Text>
             </View>
           )}
+          {item.stock <= 5 && item.stock > 0 && (
+            <View style={styles.lowStockBadge}>
+              <AlertTriangle size={8} color="#FFF" />
+            </View>
+          )}
         </View>
         <View style={styles.productInfo}>
           <Text style={styles.productName} numberOfLines={1}>{item.name}</Text>
-          <Text style={styles.productPrice}>₱{item.price.toFixed(0)}</Text>
-          <Text style={[styles.productStock, item.stock <= 5 && { color: Theme.colors.tertiary }]}>
-            Stock: {item.stock}
-          </Text>
+          <View style={styles.productFooter}>
+            <Text style={styles.productPrice}>₱{item.price.toLocaleString()}</Text>
+            <View style={styles.quickAddBtn}>
+              <Plus size={12} color="#FFF" />
+            </View>
+          </View>
         </View>
       </TouchableOpacity>
     </Animated.View>
@@ -440,6 +580,18 @@ export default function SellScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
+      <View style={styles.boutiqueHeader}>
+        <View>
+          <Text style={styles.boutiqueTitle}>Terminal</Text>
+          <Text style={styles.boutiqueSubtitle}>Point of Sale</Text>
+        </View>
+        <TouchableOpacity 
+          style={styles.settingsHeaderBtn} 
+          onPress={() => setIsSettingsOpen(true)}
+        >
+          <Settings size={22} color={Theme.colors.primary} />
+        </TouchableOpacity>
+      </View>
       {/* Trial Countdown Banner */}
       {!activated && trial?.active && (
         <View style={styles.trialBanner}>
@@ -484,25 +636,50 @@ export default function SellScreen() {
       )}
 
       {/* Sticky Categories Filter */}
-      {categories.length > 1 && (
+      {categories.length > 0 && (
         <View style={styles.categoriesSection}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {categories.map(c => (
+          <DraggableFlatList
+            horizontal
+            activationDistance={15}
+            showsHorizontalScrollIndicator={false}
+            data={localCategories}
+            onDragBegin={() => setIsDraggingGlobal(true)}
+            onDragEnd={({ data }) => {
+              setIsDraggingGlobal(false);
+              setLocalCategories(data);
+              // Defer global state update to prevent JS thread blocking during the drop animation
+              setTimeout(() => {
+                updateSettings({ ...businessSettings, customCategories: data });
+              }, 300);
+            }}
+            keyExtractor={(item) => item}
+            ListHeaderComponent={
               <TouchableOpacity 
-                key={c}
-                style={[styles.catChip, activeCategory === c && styles.catChipActive]}
-                onPress={() => setActiveCategory(c)}
+                style={[styles.catChip, activeCategory === 'All' && styles.catChipActive]}
+                onPress={() => setActiveCategory('All')}
               >
-                <Text style={[styles.catChipText, activeCategory === c && styles.catChipTextActive]}>{c}</Text>
+                <Text style={[styles.catChipText, activeCategory === 'All' && styles.catChipTextActive]}>All</Text>
               </TouchableOpacity>
-            ))}
-          </ScrollView>
+            }
+            renderItem={({ item, drag, isActive }) => (
+              <DraggableCategoryChip
+                item={item}
+                drag={drag}
+                isActive={isActive}
+                isDraggingGlobal={isDraggingGlobal}
+                activeCategory={activeCategory}
+                setActiveCategory={setActiveCategory}
+              />
+            )}
+            contentContainerStyle={{ paddingVertical: 16, overflow: 'visible' }}
+            containerStyle={{ overflow: 'visible' }}
+          />
         </View>
       )}
 
       {/* Sticky Search */}
       <View style={styles.searchSection}>
-        <View style={styles.searchBar}>
+        <View style={styles.searchInputContainer}>
           <Search size={20} color={Theme.colors.outline} />
           <TextInput
             style={styles.searchInput}
@@ -521,18 +698,28 @@ export default function SellScreen() {
         numColumns={2}
         contentContainerStyle={[styles.productList, filteredProducts.length === 0 && { flex: 1 }]}
         ListEmptyComponent={
-          <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', marginTop: 100, paddingHorizontal: 40 }}>
+          <View style={styles.emptyStateContainer}>
             {products.length === 0 ? (
               <>
-                <Store size={60} color={Theme.colors.surfaceVariant} style={{ marginBottom: 16 }} />
-                <Text style={{ fontFamily: Theme.typography.headline, fontSize: 18, color: Theme.colors.outline, textAlign: 'center', marginBottom: 8 }}>Your shop is empty!</Text>
-                <Text style={{ fontFamily: Theme.typography.body, fontSize: 14, color: Theme.colors.outlineVariant, textAlign: 'center' }}>Head over to the Inventory tab to start adding your items.</Text>
+                <View style={styles.emptyIconCircle}>
+                  <Store size={48} color={Theme.colors.primary} />
+                </View>
+                <Text style={styles.emptyStateTitle}>Your shop is empty!</Text>
+                <Text style={styles.emptyStateSub}>Head over to the Inventory tab to start adding your items.</Text>
+                <TouchableOpacity 
+                  style={styles.emptyStateBtn}
+                  onPress={() => router.push({ pathname: '/(tabs)/products', params: { action: 'add' } })}
+                >
+                  <Text style={styles.emptyStateBtnText}>Add First Product</Text>
+                </TouchableOpacity>
               </>
             ) : (
               <>
-                <Search size={60} color={Theme.colors.surfaceVariant} style={{ marginBottom: 16 }} />
-                <Text style={{ fontFamily: Theme.typography.headline, fontSize: 18, color: Theme.colors.outline, textAlign: 'center', marginBottom: 8 }}>No items found</Text>
-                <Text style={{ fontFamily: Theme.typography.body, fontSize: 14, color: Theme.colors.outlineVariant, textAlign: 'center' }}>We couldn't find any products matching your search.</Text>
+                <View style={[styles.emptyIconCircle, { backgroundColor: Theme.colors.surfaceContainerHigh }]}>
+                  <Search size={48} color={Theme.colors.outline} />
+                </View>
+                <Text style={styles.emptyStateTitle}>No items found</Text>
+                <Text style={styles.emptyStateSub}>We couldn't find any products matching your search.</Text>
               </>
             )}
           </View>
@@ -541,92 +728,64 @@ export default function SellScreen() {
 
       {cart.length > 0 && (
         <Animated.View 
-          entering={SlideInDown.duration(300)} 
-          exiting={SlideOutDown.duration(300)} 
-          style={styles.cartPanel}
+          entering={FadeInDown.springify()} 
+          exiting={FadeOutDown} 
+          style={styles.floatingCartContainer}
         >
-          <View style={styles.cartHeader}>
-            <View style={styles.cartTitleRow}>
-              <ShoppingCart size={18} color={Theme.colors.primary} />
-              <Text style={styles.cartTitle}>{cart.length} in cart</Text>
-            </View>
-            <TouchableOpacity onPress={() => setCart([])}>
-              <Text style={styles.clearAllText}>Clear All</Text>
-            </TouchableOpacity>
-          </View>
-          
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.cartScroll}>
-            {cart.map(item => {
-              const product = products.find(p => p.id === item.productId);
-              const canSellPack = businessSettings.enableBulkMode !== false && product && product.piecesPerPack && product.piecesPerPack > 1 && product.packPrice && product.packPrice > 0;
-              
-              return (
-              <View key={item.productId} style={styles.cartChip}>
-                {canSellPack && (
-                  <TouchableOpacity 
-                    onPress={() => toggleItemPack(item.productId)} 
-                    style={{ marginRight: 8, backgroundColor: 'rgba(255,255,255,0.25)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8 }}
-                  >
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                      {item.isPack ? <Package size={12} color="#FFF" /> : <Tag size={12} color="#FFF" />}
-                      <Text style={{ fontSize: 11, color: '#FFF', fontFamily: Theme.typography.bodyBold }}>
-                        {item.isPack ? 'Pack' : 'Unit'}
-                      </Text>
-                      <ArrowRightLeft size={10} color="#FFF" style={{ marginLeft: 2, opacity: 0.8 }} />
-                    </View>
-                  </TouchableOpacity>
-                )}
-                <Text style={styles.cartChipName} numberOfLines={1}>{item.productName} ₱{item.priceAtSale}</Text>
-                <View style={styles.qtyControls}>
-                  <TouchableOpacity onPress={() => updateQty(item.productId, -1)}>
-                    <Minus size={14} color="#FFF" />
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => handleManualQtyPress(item)}>
-                    <Text style={styles.qtyText}>{item.qty}</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => updateQty(item.productId, 1)}>
-                    <Plus size={14} color="#FFF" />
-                  </TouchableOpacity>
+          {/* Thought Bubble Peek Extension */}
+          {isCartPeeking && (
+            <Animated.View 
+              entering={ZoomIn.duration(200)}
+              exiting={ZoomOut.duration(150)}
+              style={styles.cartPeekExtension}
+            >
+              <View style={styles.peekBubbleContainer}>
+                <View style={styles.peekShadowWrapper}>
+                  <BlurView intensity={95} tint="light" style={styles.peekBlur}>
+                    <Text style={styles.peekTitle}>Quick Review</Text>
+                    <ScrollView style={{ maxHeight: 150 }} showsVerticalScrollIndicator={false}>
+                      {cart.map((item) => (
+                        <View key={item.productId} style={styles.peekItem}>
+                          <Text style={styles.peekItemName} numberOfLines={1}>{item.productName}</Text>
+                          <Text style={styles.peekItemQty}>×{item.qty}</Text>
+                        </View>
+                      ))}
+                    </ScrollView>
+                  </BlurView>
                 </View>
-                {/* Floating Delete Button at Top Right */}
-                <TouchableOpacity 
-                   style={styles.removeChipBtn} 
-                   onPress={() => removeFromCart(item.productId)}
-                >
-                  <X size={12} color={Theme.colors.tertiary} strokeWidth={3} />
-                </TouchableOpacity>
+                {/* Speech Bubble Tail */}
+                <View style={styles.peekTail} />
               </View>
-              );
-            })}
-          </ScrollView>
+            </Animated.View>
+          )}
 
-          <View style={styles.checkoutSection}>
-            <View style={styles.paymentToggle}>
-              <TouchableOpacity 
-                style={[styles.payOption, paymentType === 'cash' && styles.payOptionActive]} 
-                onPress={() => setPaymentType('cash')}
-              >
-                <Text style={[styles.payOptionText, paymentType === 'cash' && styles.payOptionTextActive]}>Cash</Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={[
-                  styles.payOption, 
-                  paymentType === 'gcash' && styles.payOptionActive,
-                  !businessSettings.gcashQrUri && { opacity: 0.5 }
-                ]} 
-                onPress={() => handlePaymentTypeChange('gcash')}
-              >
-                <Text style={[styles.payOptionText, paymentType === 'gcash' && styles.payOptionTextActive]}>GCash</Text>
-              </TouchableOpacity>
-            </View>
-            
-            <TouchableOpacity style={styles.payButton} onPress={() => setCheckoutModalVisible(true)}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Text style={styles.payButtonText}>Pay ₱{total.toFixed(0)}</Text>
-                <ChevronRight size={20} color="#FFF" />
+          <TouchableOpacity 
+            style={styles.floatingCartPill}
+            onPress={() => setCheckoutModalVisible(true)}
+            onLongPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              setIsCartPeeking(true);
+            }}
+            onPressOut={() => {
+              if (isCartPeeking) {
+                setIsCartPeeking(false);
+              }
+            }}
+            activeOpacity={0.9}
+          >
+            <View style={styles.pillLeft}>
+              <View style={styles.itemCountBadge}>
+                <Text style={styles.itemCountText}>{cart.reduce((sum, item) => sum + item.qty, 0)}</Text>
               </View>
-            </TouchableOpacity>
-          </View>
+              <Text style={styles.pillLabel}>{cart.reduce((sum, item) => sum + item.qty, 0) === 1 ? 'Item' : 'Items'} Selected</Text>
+            </View>
+            <View style={styles.pillRight}>
+              <Text style={styles.pillTotal}>₱{total.toLocaleString()}</Text>
+              <View style={styles.pillAction}>
+                <ShoppingBag size={20} color="#FFF" />
+              </View>
+            </View>
+          </TouchableOpacity>
         </Animated.View>
       )}
 
@@ -634,7 +793,7 @@ export default function SellScreen() {
       <TouchableOpacity 
         style={[
           styles.scanFAB, 
-          cart.length > 0 && { bottom: 180 } // Lift it up when cart is visible
+          cart.length > 0 && { bottom: 210 } // Lift it up when cart is visible
         ]} 
         onPress={startScanning}
       >
@@ -643,7 +802,7 @@ export default function SellScreen() {
 
       {/* Manual Qty Modal (Cross-platform) */}
       <Modal visible={qtyModalVisible} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
+        <BlurView intensity={40} tint="light" style={styles.modalOverlay}>
           <View style={styles.qtyModalContent}>
             <Text style={styles.qtyModalTitle}>Set Quantity</Text>
             <Text style={styles.qtyModalSub}>{editingItem?.productName}</Text>
@@ -665,12 +824,12 @@ export default function SellScreen() {
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </BlurView>
       </Modal>
 
       {/* Checkout Summary Modal */}
       <Modal visible={checkoutModalVisible} transparent animationType="slide">
-        <View style={styles.sheetOverlay}>
+        <BlurView intensity={40} tint="light" style={styles.sheetOverlay}>
           <View style={styles.checkoutModalContent}>
             <View style={styles.dialogHeader}>
               <Text style={styles.dialogTitle}>Complete Sale</Text>
@@ -679,18 +838,75 @@ export default function SellScreen() {
               </TouchableOpacity>
             </View>
 
-            <View style={styles.paymentSummary}>
-              <View style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>Total Amount</Text>
-                <Text style={styles.totalValue}>₱{total.toLocaleString()}</Text>
+            <View style={styles.cartReviewSection}>
+              <View style={styles.cartHeader}>
+                <View style={styles.cartTitleRow}>
+                  <ShoppingBag size={18} color={Theme.colors.primary} />
+                  <Text style={styles.cartTitle}>Cart Items</Text>
+                </View>
+                <TouchableOpacity onPress={() => setCart([])}>
+                  <Text style={styles.clearAllText}>Clear All</Text>
+                </TouchableOpacity>
               </View>
-              <View style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>Payment Method</Text>
-                <View style={styles.badge}>
-                  <Text style={styles.badgeText}>{paymentType.toUpperCase()}</Text>
+              
+              <ScrollView 
+                horizontal 
+                showsHorizontalScrollIndicator={false} 
+                style={styles.cartScroll}
+                contentContainerStyle={{ paddingBottom: 10 }}
+              >
+                {cart.map((item) => (
+                  <View key={item.productId} style={styles.cartChip}>
+                    <Text style={styles.cartChipName} numberOfLines={1}>{item.productName}</Text>
+                    <View style={styles.qtyControls}>
+                      <TouchableOpacity onPress={() => updateQty(item.productId, -1)}>
+                        <Minus size={14} color="#FFF" strokeWidth={3} />
+                      </TouchableOpacity>
+                      <Text style={styles.qtyText}>{item.qty}</Text>
+                      <TouchableOpacity onPress={() => updateQty(item.productId, 1)}>
+                        <Plus size={14} color="#FFF" strokeWidth={3} />
+                      </TouchableOpacity>
+                    </View>
+                    <TouchableOpacity 
+                      style={styles.removeChipBtn} 
+                      onPress={() => removeFromCart(item.productId)}
+                    >
+                      <X size={12} color={Theme.colors.tertiary} />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </ScrollView>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {/* Payment Method Toggle */}
+              <View style={styles.paymentToggle}>
+                <TouchableOpacity 
+                  style={[styles.payOption, paymentType === 'cash' && styles.payOptionActive]}
+                  onPress={() => handlePaymentTypeChange('cash')}
+                >
+                  <Text style={[styles.payOptionText, paymentType === 'cash' && styles.payOptionTextActive]}>Cash</Text>
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  style={[styles.payOption, paymentType === 'gcash' && styles.payOptionActive]}
+                  onPress={() => handlePaymentTypeChange('gcash')}
+                >
+                  <Text style={[styles.payOptionText, paymentType === 'gcash' && styles.payOptionTextActive]}>GCash</Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.paymentSummary}>
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>Total Amount</Text>
+                  <Text style={styles.totalValue}>₱{total.toLocaleString()}</Text>
+                </View>
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>Payment Method</Text>
+                  <View style={styles.badge}>
+                    <Text style={styles.badgeText}>{paymentType.toUpperCase()}</Text>
+                  </View>
                 </View>
               </View>
-            </View>
 
             {paymentType === 'gcash' && (
               <View style={styles.qrContainer}>
@@ -706,7 +922,17 @@ export default function SellScreen() {
               </View>
             )}
 
-            <TouchableOpacity style={styles.confirmCheckoutBtn} onPress={handleCheckout}>
+            <TouchableOpacity 
+              style={styles.confirmCheckoutBtn} 
+              onPress={() => showAlert(
+                'Confirm Sale', 
+                `Proceed with ₱${total.toLocaleString()} payment?`, 
+                'info', 
+                handleCheckout, 
+                true, 
+                'Process Sale'
+              )}
+            >
               <CheckCircle2 size={24} color="#FFF" style={{ marginRight: 8 }} />
               <Text style={styles.confirmCheckoutText}>Confirm Payment</Text>
             </TouchableOpacity>
@@ -724,13 +950,14 @@ export default function SellScreen() {
               <ReceiptText size={20} color={Theme.colors.primary} style={{ marginRight: 8 }} />
               <Text style={styles.utangCheckoutText}>Charge to Utang (Credit)</Text>
             </TouchableOpacity>
+            </ScrollView>
           </View>
-        </View>
+        </BlurView>
       </Modal>
 
       {/* Utang Customer Name Modal */}
       <Modal visible={utangModalVisible} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
+        <BlurView intensity={40} tint="light" style={styles.modalOverlay}>
           <View style={styles.utangPromptCard}>
             <Text style={styles.utangPromptTitle}>Customer Name</Text>
             <Text style={styles.utangPromptSub}>Who is this debt for?</Text>
@@ -750,39 +977,52 @@ export default function SellScreen() {
               </TouchableOpacity>
               <TouchableOpacity 
                 style={styles.utangConfirmBtn} 
-                onPress={handleUtangCheckout}
+                onPress={() => {
+                  if (!customerName.trim()) {
+                    showAlert('Required', 'Please enter customer name', 'warning');
+                    return;
+                  }
+                  showAlert(
+                    'Confirm Utang', 
+                    `Charge ₱${total.toLocaleString()} to ${customerName}?`, 
+                    'warning', 
+                    handleUtangCheckout, 
+                    true, 
+                    'Charge Account'
+                  );
+                }}
               >
                 <Text style={styles.utangConfirmText}>Create Utang</Text>
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </BlurView>
       </Modal>
 
       {/* Welcome Modal */}
       <Modal visible={showWelcome} transparent animationType="slide">
-        <View style={styles.welcomeOverlay}>
+        <BlurView intensity={40} tint="light" style={styles.welcomeOverlay}>
           <View style={styles.welcomeCard}>
             <Rocket size={64} color={Theme.colors.primary} style={{ marginBottom: 20 }} />
             <Text style={styles.welcomeTitle}>Welcome to TindaDone!</Text>
             <Text style={styles.welcomeDesc}>Your store is ready to go. You can start adding items or making sales right away!</Text>
             <TouchableOpacity 
               style={styles.welcomeBtn} 
-              onPress={async () => {
-                await markWelcomeAsSeen();
+              onPress={() => {
                 setShowWelcome(false);
+                markWelcomeAsSeen();
               }}
             >
               <Text style={styles.welcomeBtnText}>Let's Go!</Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </BlurView>
       </Modal>
 
       {/* Rapid-Fire Scanner Mode HUD */}
       <Modal visible={isScanningMode} animationType="slide">
         <SafeAreaView style={styles.scannerHUDContainer}>
-          <View style={styles.scannerHUDHeader}>
+          <View style={[styles.scannerHUDHeader, { paddingTop: Math.max(insets.top, Platform.OS === 'android' ? 50 : 40) }]}>
             <Text style={styles.scannerHUDTitle}>Rapid-Fire Scanner</Text>
             <TouchableOpacity onPress={() => setIsScanningMode(false)} style={styles.closeHUDButton}>
               <X size={28} color={Theme.colors.onSurface} />
@@ -871,8 +1111,8 @@ export default function SellScreen() {
 
       {/* Custom Alert Modal */}
       <Modal visible={alertVisible} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={styles.alertCard}>
+        <BlurView intensity={20} tint="dark" style={styles.modalOverlay}>
+          <Animated.View entering={ZoomIn} style={styles.alertCard}>
             {alertConfig.type === 'success' && <CheckCircle2 size={48} color={Theme.colors.primary} style={styles.alertIcon} />}
             {alertConfig.type === 'error' && <X size={48} color={Theme.colors.tertiary} style={styles.alertIcon} />}
             {alertConfig.type === 'warning' && <AlertTriangle size={48} color="#f59e0b" style={styles.alertIcon} />}
@@ -881,26 +1121,136 @@ export default function SellScreen() {
             <Text style={styles.alertTitle}>{alertConfig.title}</Text>
             <Text style={styles.alertMessage}>{alertConfig.message}</Text>
             
-            <TouchableOpacity 
-              style={[
-                styles.alertBtn, 
-                { backgroundColor: alertConfig.type === 'error' || alertConfig.type === 'warning' ? Theme.colors.tertiary : Theme.colors.primary }
-              ]} 
-              onPress={() => {
-                setAlertVisible(false);
-                if (alertConfig.onConfirm) alertConfig.onConfirm();
-              }}
-            >
-              <Text style={styles.alertBtnText}>Got it</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+            <View style={alertConfig.showCancel ? styles.alertActionRow : { width: '100%' }}>
+              {alertConfig.showCancel && (
+                <TouchableOpacity 
+                  style={[styles.alertBtn, styles.alertCancelBtn]} 
+                  onPress={() => setAlertVisible(false)}
+                >
+                  <Text style={styles.alertCancelBtnText}>Cancel</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity 
+                style={[
+                  styles.alertBtn, 
+                  alertConfig.showCancel && { flex: 1 },
+                  { backgroundColor: alertConfig.type === 'error' || alertConfig.type === 'warning' ? Theme.colors.tertiary : Theme.colors.primary }
+                ]} 
+                onPress={() => {
+                  setAlertVisible(false);
+                  if (alertConfig.onConfirm) alertConfig.onConfirm();
+                }}
+              >
+                <Text style={styles.alertBtnText}>{alertConfig.confirmText || 'Got it'}</Text>
+              </TouchableOpacity>
+            </View>
+          </Animated.View>
+        </BlurView>
       </Modal>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  boutiqueHeader: {
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 8,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  settingsHeaderBtn: {
+    padding: 8,
+    backgroundColor: Theme.colors.surfaceContainerHigh,
+    borderRadius: 16,
+  },
+  boutiqueTitle: {
+    fontFamily: Theme.typography.headlineBlack,
+    fontSize: 34,
+    color: Theme.colors.onSurface,
+    letterSpacing: -1.5,
+  },
+  boutiqueSubtitle: {
+    fontFamily: Theme.typography.bodyBold,
+    fontSize: 12,
+    color: Theme.colors.primary,
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+    opacity: 0.8,
+  },
+  floatingCartContainer: {
+    position: 'absolute',
+    bottom: 120, // Clearly above the floating tab bar
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    zIndex: 100,
+  },
+  floatingCartPill: {
+    flexDirection: 'row',
+    backgroundColor: Theme.colors.primary, // Premium Boutique Green
+    width: '100%',
+    height: 72,
+    borderRadius: 36,
+    paddingHorizontal: 8,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    elevation: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+  },
+  pillLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingLeft: 16,
+  },
+  itemCountBadge: {
+    backgroundColor: Theme.colors.primary,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  itemCountText: {
+    fontFamily: Theme.typography.headlineBlack,
+    color: '#FFF',
+    fontSize: 16,
+  },
+  pillLabel: {
+    fontFamily: Theme.typography.bodyBold,
+    color: '#FFF',
+    fontSize: 14,
+    opacity: 0.9,
+  },
+  pillRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    height: 56,
+    borderRadius: 28,
+    paddingLeft: 20,
+    paddingRight: 6,
+  },
+  pillTotal: {
+    fontFamily: Theme.typography.headlineBlack,
+    color: '#FFF',
+    fontSize: 20,
+  },
+  pillAction: {
+    backgroundColor: Theme.colors.primary,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   container: {
     flex: 1,
     backgroundColor: Theme.colors.background,
@@ -924,64 +1274,81 @@ const styles = StyleSheet.create({
     padding: 12,
     paddingBottom: 4,
   },
-  searchBar: {
+  searchInputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: Theme.colors.surfaceContainerLow,
-    borderRadius: 16,
-    paddingHorizontal: 12,
-    height: 48,
+    borderRadius: 26,
+    paddingHorizontal: 16,
+    height: 52,
+    marginBottom: 16,
+    marginHorizontal: 16,
+    borderWidth: 1.5,
+    borderColor: Theme.colors.outlineVariant,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.03,
+    shadowRadius: 5,
+    elevation: 1,
+  },
+  searchInput: {
+    flex: 1,
+    marginLeft: 12,
+    fontFamily: Theme.typography.bodySemiBold,
+    fontSize: 15,
+    color: Theme.colors.onSurface,
   },
   categoriesSection: {
-    paddingHorizontal: 16,
-    marginBottom: 16,
+    backgroundColor: Theme.colors.background,
   },
   catChip: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 20,
     paddingVertical: 10,
-    backgroundColor: Theme.colors.surfaceContainerHighest,
-    borderRadius: 16,
-    marginRight: 8,
+    borderRadius: 24,
+    backgroundColor: Theme.colors.surfaceContainerHigh,
+    marginRight: 10,
+    marginLeft: 16,
+    borderWidth: 1,
+    borderColor: Theme.colors.outlineVariant,
   },
   catChipActive: {
     backgroundColor: Theme.colors.primary,
+    borderColor: Theme.colors.primary,
   },
   catChipText: {
     fontFamily: Theme.typography.bodyBold,
-    color: Theme.colors.primary,
     fontSize: 13,
+    color: Theme.colors.onSurfaceVariant,
   },
   catChipTextActive: {
     color: '#FFF',
   },
-  searchInput: {
-    flex: 1,
-    marginLeft: 10,
-    fontFamily: Theme.typography.bodyMedium,
-    fontSize: 15,
-    color: Theme.colors.onSurface,
-  },
   productList: {
-    padding: 8,
-    paddingBottom: 220,
-  },
-  productCard: {
-    width: (width - 16) / 2 - 12,
-    backgroundColor: Theme.colors.surfaceContainerLowest,
-    margin: 6,
-    borderRadius: 20,
     padding: 12,
-    borderWidth: 1,
-    borderColor: Theme.colors.outlineVariant + '20',
+    paddingBottom: 140,
+  },
+  // Compact Grid Product Cards
+  productCard: {
+    backgroundColor: '#FFF',
+    borderRadius: 24,
+    padding: 6,
+    margin: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 2,
+    width: (width - 40) / 2,
+  },
+  productCardDisabled: {
+    opacity: 0.4,
   },
   productImageContainer: {
     width: '100%',
-    aspectRatio: 1,
-    backgroundColor: Theme.colors.surfaceContainerHigh,
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 8,
+    aspectRatio: 1.2,
+    borderRadius: 18,
+    backgroundColor: Theme.colors.surfaceContainerLow,
+    marginBottom: 6,
     overflow: 'hidden',
   },
   productImage: {
@@ -989,60 +1356,128 @@ const styles = StyleSheet.create({
     height: '100%',
   },
   letterPlaceholder: {
-    width: '100%',
-    height: '100%',
-    backgroundColor: Theme.colors.secondaryContainer,
+    flex: 1,
+    backgroundColor: Theme.colors.secondaryContainer + '30',
     justifyContent: 'center',
     alignItems: 'center',
   },
   letterText: {
     fontFamily: Theme.typography.headlineBlack,
-    color: Theme.colors.onSecondaryContainer,
-    fontSize: 24,
-  },
-  productInfo: {
-    flex: 1,
-  },
-  productName: {
-    fontFamily: Theme.typography.headline,
-    fontSize: 15,
-    color: Theme.colors.onSurface,
-  },
-  productPrice: {
-    fontFamily: Theme.typography.headlineBlack,
-    fontSize: 16,
     color: Theme.colors.primary,
-    marginVertical: 2,
+    fontSize: 28,
+    opacity: 0.25,
   },
-  productStock: {
-    fontFamily: Theme.typography.bodyBold,
-    fontSize: 10,
-    color: Theme.colors.outline,
-  },
-  addButton: {
+  lowStockBadge: {
     position: 'absolute',
-    bottom: 12,
-    right: 12,
-    backgroundColor: Theme.colors.primary,
-    width: 32,
-    height: 32,
-    borderRadius: 10,
+    top: 6,
+    right: 6,
+    backgroundColor: Theme.colors.tertiary,
+    width: 20,
+    height: 20,
+    borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
   },
+  productInfo: {
+    paddingHorizontal: 4,
+    paddingBottom: 4,
+  },
+  productName: {
+    fontFamily: Theme.typography.bodySemiBold,
+    fontSize: 13,
+    color: Theme.colors.onSurface,
+    marginBottom: 4,
+  },
+  productFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  productPrice: {
+    fontFamily: Theme.typography.headlineBlack,
+    fontSize: 15,
+    color: Theme.colors.primary,
+  },
+  quickAddBtn: {
+    backgroundColor: Theme.colors.primary,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  addButton: {
+    backgroundColor: Theme.colors.primary,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 4,
+    shadowColor: Theme.colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+  },
+  fab: {
+    position: 'absolute',
+    bottom: 120,
+    right: 24,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: Theme.colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: Theme.colors.primary,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 15,
+    elevation: 10,
+    zIndex: 99,
+  },
   cartPanel: {
     position: 'absolute',
-    bottom: 0,
-    width: '100%',
-    backgroundColor: '#FFF',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    padding: 16,
+    bottom: 24,
+    left: 20,
+    right: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    borderRadius: 32,
+    padding: 20,
     elevation: 20,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.5)',
+  },
+  sheetOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  checkoutModalContent: {
+    backgroundColor: Theme.colors.surface,
+    borderTopLeftRadius: 36,
+    borderTopRightRadius: 36,
+    padding: 24,
+    paddingBottom: 40,
+    maxHeight: '90%',
+  },
+  dialogHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  dialogTitle: {
+    fontFamily: Theme.typography.headlineBlack,
+    fontSize: 22,
+  },
+  cartReviewSection: {
+    marginBottom: 20,
+    marginTop: -10,
   },
   cartHeader: {
     flexDirection: 'row',
@@ -1071,35 +1506,40 @@ const styles = StyleSheet.create({
   },
   cartChip: {
     backgroundColor: Theme.colors.primary,
-    borderRadius: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    marginRight: 10,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    marginRight: 12,
     flexDirection: 'row',
     alignItems: 'center',
     position: 'relative',
-    marginTop: 6, 
+    marginTop: 8,
+    shadowColor: Theme.colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 4,
   },
   cartChipName: {
     color: '#FFF',
     fontFamily: Theme.typography.bodyBold,
-    fontSize: 13,
-    marginRight: 8,
-    maxWidth: 100,
+    fontSize: 14,
+    marginRight: 12,
+    maxWidth: 120,
   },
   qtyControls: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    borderRadius: 12,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderRadius: 14,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
   },
   qtyText: {
     color: '#FFF',
     fontFamily: Theme.typography.headlineBlack,
-    marginHorizontal: 8,
-    fontSize: 13,
+    marginHorizontal: 10,
+    fontSize: 14,
   },
   removeChipBtn: {
     position: 'absolute',
@@ -1148,12 +1588,17 @@ const styles = StyleSheet.create({
   payButton: {
     flex: 1.5,
     backgroundColor: Theme.colors.primary,
-    height: 52,
+    height: 56,
     borderRadius: 20,
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
     gap: 8,
+    shadowColor: Theme.colors.primary,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 6,
   },
   payButtonText: {
     fontFamily: Theme.typography.headlineBlack,
@@ -1161,18 +1606,11 @@ const styles = StyleSheet.create({
     fontSize: 18,
     includeFontPadding: false,
     textAlignVertical: 'center',
-    marginTop: -2,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'transparent',
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  sheetOverlay: {
-    flex: 1,
-    backgroundColor: 'transparent',
-    justifyContent: 'flex-end',
   },
   qtyModalContent: {
     backgroundColor: Theme.colors.surface,
@@ -1244,19 +1682,28 @@ const styles = StyleSheet.create({
     fontSize: 9,
   },
   unitToggle: {
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-    marginRight: 8,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20, // Circular Pill
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
   },
   unitTogglePack: {
     backgroundColor: '#FFF',
+    borderColor: '#FFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
   },
   unitToggleText: {
-    fontFamily: Theme.typography.bodyBold,
-    fontSize: 10,
-    color: '#FFF',
+    fontFamily: Theme.typography.headlineBlack,
+    fontSize: 9,
+    color: 'rgba(255,255,255,0.8)',
+    letterSpacing: 0.5,
   },
   unitToggleTextActive: {
     color: Theme.colors.primary,
@@ -1276,44 +1723,30 @@ const styles = StyleSheet.create({
     fontFamily: Theme.typography.bodyBold,
     color: '#FFF',
   },
-  checkoutModalContent: {
-    backgroundColor: Theme.colors.surface,
-    borderTopLeftRadius: 36,
-    borderTopRightRadius: 36,
-    padding: 24,
-    maxHeight: '90%',
-  },
-  dialogHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  dialogTitle: {
-    fontFamily: Theme.typography.headlineBlack,
-    fontSize: 22,
-  },
   paymentSummary: {
     backgroundColor: Theme.colors.surfaceContainerLow,
-    borderRadius: 24,
-    padding: 20,
-    marginBottom: 20,
+    borderRadius: 28,
+    padding: 24,
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: Theme.colors.outlineVariant,
   },
   summaryRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 16,
   },
   summaryLabel: {
-    fontFamily: Theme.typography.bodyBold,
+    fontFamily: Theme.typography.bodyMedium,
     color: Theme.colors.outline,
-    fontSize: 13,
+    fontSize: 14,
   },
   totalValue: {
     fontFamily: Theme.typography.headlineBlack,
-    fontSize: 28,
+    fontSize: 32,
     color: Theme.colors.primary,
+    letterSpacing: -1,
   },
   badge: {
     backgroundColor: Theme.colors.primaryContainer,
@@ -1339,7 +1772,6 @@ const styles = StyleSheet.create({
   // Welcome & Setup Styles
   welcomeOverlay: {
     flex: 1,
-    backgroundColor: 'transparent',
     justifyContent: 'center',
     padding: 24,
     alignItems: 'center',
@@ -1453,25 +1885,31 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   shortcutCard: {
-    width: 64,
+    width: 72,
     alignItems: 'center',
+    marginRight: 8,
   },
   shortcutIcon: {
-    width: 56,
-    height: 56,
-    borderRadius: 18,
-    backgroundColor: Theme.colors.surfaceContainerHigh,
+    width: 60,
+    height: 60,
+    borderRadius: 20,
+    backgroundColor: Theme.colors.surfaceContainerLowest,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 6,
+    marginBottom: 8,
     overflow: 'hidden',
-    borderWidth: 1.5,
-    borderColor: Theme.colors.outlineVariant + '20',
+    borderWidth: 1,
+    borderColor: Theme.colors.outlineVariant,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
   },
   shortcutPlaceholder: {
     width: '100%',
     height: '100%',
-    backgroundColor: Theme.colors.secondaryContainer,
+    backgroundColor: Theme.colors.surfaceContainerLow,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -1481,14 +1919,15 @@ const styles = StyleSheet.create({
   },
   shortcutLetter: {
     fontFamily: Theme.typography.headlineBlack,
-    fontSize: 22,
-    color: Theme.colors.onSecondaryContainer,
+    fontSize: 24,
+    color: Theme.colors.primary,
   },
   shortcutLabel: {
-    fontFamily: Theme.typography.bodySemiBold,
+    fontFamily: Theme.typography.bodyBold,
     fontSize: 10,
     color: Theme.colors.onSurface,
     textAlign: 'center',
+    marginTop: 2,
   },
   // Scanner HUD Styles
   scanToggleBtn: {
@@ -1497,7 +1936,7 @@ const styles = StyleSheet.create({
   },
   scanFAB: {
     position: 'absolute',
-    bottom: 30,
+    bottom: 110, // Clearly above floating tab bar
     right: 30,
     backgroundColor: Theme.colors.primary,
     width: 64,
@@ -1522,7 +1961,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingBottom: 20,
-    paddingTop: Platform.OS === 'android' ? 50 : 50,
     backgroundColor: Theme.colors.surface,
   },
   scannerHUDTitle: {
@@ -1597,7 +2035,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: '#FFF',
+    backgroundColor: Theme.colors.surfaceContainerHigh, // Darker Obsidian Tint
     padding: 12,
     borderRadius: 16,
     marginBottom: 8,
@@ -1617,9 +2055,9 @@ const styles = StyleSheet.create({
   },
   miniItemQty: {
     fontFamily: Theme.typography.headlineBlack,
-    fontSize: 14,
-    color: Theme.colors.onSurface,
-    minWidth: 20,
+    fontSize: 20,
+    color: Theme.colors.primary, // Back to Emerald/Primary for visibility
+    minWidth: 30,
     textAlign: 'center',
   },
   emptyHUDCart: {
@@ -1637,7 +2075,7 @@ const styles = StyleSheet.create({
   // Custom Alert Styles
   alertCard: {
     width: width * 0.85,
-    backgroundColor: Theme.colors.surface,
+    backgroundColor: 'rgba(255,255,255,0.92)', // Crystal Glass
     borderRadius: 32,
     padding: 32,
     alignItems: 'center',
@@ -1670,8 +2108,27 @@ const styles = StyleSheet.create({
   alertBtn: {
     width: '100%',
     paddingVertical: 16,
-    borderRadius: 16,
+    borderRadius: 28, // Pill shape
     alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  alertActionRow: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
+  },
+  alertCancelBtn: {
+    flex: 1,
+    backgroundColor: Theme.colors.surfaceContainerHigh,
+  },
+  alertCancelBtnText: {
+    fontFamily: Theme.typography.headlineBlack,
+    color: Theme.colors.outline,
+    fontSize: 16,
   },
   alertBtnText: {
     fontFamily: Theme.typography.headlineBlack,
@@ -1726,21 +2183,23 @@ const styles = StyleSheet.create({
   utangCheckoutBtn: {
     width: '100%',
     height: 56,
-    borderRadius: 16,
+    borderRadius: 20,
     borderWidth: 1.5,
     borderColor: Theme.colors.primary,
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: 'transparent',
   },
   utangCheckoutText: {
-    fontFamily: Theme.typography.bodyBold,
+    fontFamily: Theme.typography.headlineBlack,
     color: Theme.colors.primary,
     fontSize: 16,
+    letterSpacing: 0.5,
   },
   utangPromptCard: {
     width: '90%',
-    backgroundColor: '#FFF',
+    backgroundColor: 'rgba(255,255,255,0.95)', // Glassy prompt
     borderRadius: 24,
     padding: 24,
     shadowColor: '#000',
@@ -1797,5 +2256,123 @@ const styles = StyleSheet.create({
   utangConfirmText: {
     fontFamily: Theme.typography.bodyBold,
     color: '#FFF',
+  },
+  // Empty States
+  emptyStateContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 80,
+    paddingHorizontal: 40,
+  },
+  emptyIconCircle: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: Theme.colors.primaryContainer + '20',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  emptyStateTitle: {
+    fontFamily: Theme.typography.headlineBlack,
+    fontSize: 20,
+    color: Theme.colors.onSurface,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  emptyStateSub: {
+    fontFamily: Theme.typography.bodyMedium,
+    fontSize: 15,
+    color: Theme.colors.outline,
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: 32,
+  },
+  emptyStateBtn: {
+    backgroundColor: Theme.colors.primary,
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    borderRadius: 16,
+    shadowColor: Theme.colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  emptyStateBtnText: {
+    fontFamily: Theme.typography.headlineBlack,
+    color: '#FFF',
+    fontSize: 14,
+  },
+  cartPeekExtension: {
+    position: 'absolute',
+    bottom: 85, // Lifted slightly for the tail
+    left: 20,
+    right: 40,
+    alignItems: 'flex-start',
+    zIndex: 100, // Show above for smoothness
+  },
+  peekBubbleContainer: {
+    alignItems: 'flex-start',
+  },
+  peekShadowWrapper: {
+    borderRadius: 20,
+    backgroundColor: 'transparent',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.12,
+    shadowRadius: 15,
+    elevation: 10,
+  },
+  peekBlur: {
+    backgroundColor: 'rgba(255,255,255,0.98)',
+    borderRadius: 20,
+    padding: 12,
+    width: 220,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.5)',
+    overflow: 'hidden', // Force perfect corners
+  },
+  peekTail: {
+    width: 0,
+    height: 0,
+    backgroundColor: 'transparent',
+    borderStyle: 'solid',
+    borderLeftWidth: 8,
+    borderRightWidth: 8,
+    borderTopWidth: 8,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderTopColor: 'rgba(255,255,255,0.98)',
+    marginLeft: 24, // Position the tail
+  },
+  peekTitle: {
+    fontFamily: Theme.typography.bodyBold,
+    fontSize: 11,
+    color: Theme.colors.primary,
+    textTransform: 'uppercase',
+    letterSpacing: 1.5,
+    marginBottom: 12,
+  },
+  peekItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(0,0,0,0.05)',
+  },
+  peekItemName: {
+    fontFamily: Theme.typography.bodySemiBold,
+    fontSize: 14,
+    color: Theme.colors.onSurface,
+    flex: 1,
+  },
+  peekItemQty: {
+    fontFamily: Theme.typography.headlineBlack,
+    fontSize: 14,
+    color: Theme.colors.primary,
+    marginLeft: 12,
   },
 });

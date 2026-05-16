@@ -1,3 +1,5 @@
+import 'react-native-gesture-handler';
+import { View, Dimensions } from 'react-native';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
@@ -11,6 +13,7 @@ import {
   InterruptionModeAndroid, 
   InterruptionModeIOS 
 } from 'expo-av';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import {
   PlusJakartaSans_400Regular,
@@ -25,9 +28,12 @@ import {
   Manrope_700Bold,
 } from '@expo-google-fonts/manrope';
 
-import { useColorScheme } from '@/components/useColorScheme';
+import { useColorScheme } from '../components/useColorScheme';
 import { Theme } from '../constants/Theme';
 import { SettingsProvider } from '../context/SettingsContext';
+import { TintinProvider } from '../context/TintinContext';
+import { TintinMascot } from '../components/TintinMascot';
+import { syncActivationStatus } from '../lib/license';
 
 export {
   // Catch any errors thrown by the Layout component.
@@ -64,6 +70,9 @@ export default function RootLayout() {
     if (loaded) {
       SplashScreen.hideAsync();
       
+      // Check if license was remotely revoked
+      syncActivationStatus();
+
       // Configure Audio to play even in silent mode
       Audio.setAudioModeAsync({
         playsInSilentModeIOS: true,
@@ -83,7 +92,25 @@ export default function RootLayout() {
 
   return (
     <SettingsProvider>
-      <RootLayoutNav />
+      <TintinProvider>
+        <View style={{ flex: 1, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' }}>
+          <View style={{ 
+            width: '100%', 
+            maxWidth: 500, 
+            flex: 1, 
+            position: 'relative', 
+            backgroundColor: Theme.colors.background,
+            overflow: 'hidden',
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 0 },
+            shadowOpacity: 0.5,
+            shadowRadius: 20,
+          }}>
+            <RootLayoutNav />
+            <TintinMascot />
+          </View>
+        </View>
+      </TintinProvider>
     </SettingsProvider>
   );
 }
@@ -108,18 +135,18 @@ function RootLayoutNav() {
   if (canEnter === null) return null; // still checking
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack screenOptions={{ contentStyle: { backgroundColor: Theme.colors.background }, headerShown: false }}>
-        <Stack.Screen name="activate" options={{ headerShown: false }} />
-        {canEnter && (
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+        <Stack screenOptions={{ contentStyle: { backgroundColor: Theme.colors.background }, headerShown: false }}>
+          <Stack.Screen name="activate" options={{ headerShown: false }} />
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        )}
-        <Stack.Screen name="sales-history" options={{ headerShown: false }} />
-        <Stack.Screen name="product/[id]" options={{ headerShown: false }} />
-        <Stack.Screen name="transaction/[id]" options={{ headerShown: false }} />
-        <Stack.Screen name="history" options={{ headerShown: false }} />
-        <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
-      </Stack>
-    </ThemeProvider>
+          <Stack.Screen name="sales-history" options={{ headerShown: false }} />
+          <Stack.Screen name="product/[id]" options={{ headerShown: false }} />
+          <Stack.Screen name="transaction/[id]" options={{ headerShown: false }} />
+          <Stack.Screen name="history" options={{ headerShown: false }} />
+          <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
+        </Stack>
+      </ThemeProvider>
+    </GestureHandlerRootView>
   );
 }
