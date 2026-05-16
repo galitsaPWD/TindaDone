@@ -10,7 +10,7 @@ const TRIAL_DAYS = 3;
 
 // 🔗 Vercel Admin API URL
 // CRITICAL: Update this to your deployed Vercel URL
-const PRODUCTION_URL = 'https://tinda-done-admin.vercel.app';
+const PRODUCTION_URL = 'https://tinda-done.vercel.app';
 const API_BASE_URL = PRODUCTION_URL; 
 
 const ADMIN_SECRET = 'tindadone_admin_2026_xyz';

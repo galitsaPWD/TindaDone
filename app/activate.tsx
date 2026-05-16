@@ -56,7 +56,7 @@ export default function ActivateScreen() {
       // 🔄 AUTO-RECOVERY CHECK
       // Check if this device is already activated on the server (e.g. after a Restore)
       try {
-        const PRODUCTION_URL = 'https://tinda-done-admin.vercel.app';
+        const PRODUCTION_URL = 'https://tinda-done.vercel.app';
         const res = await fetch(`${PRODUCTION_URL}/api/check-status?deviceId=${code}`);
         if (res.ok) {
           const data = await res.json();

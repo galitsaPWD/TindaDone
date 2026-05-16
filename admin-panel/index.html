@@ -414,7 +414,7 @@
         function getApiBase() {
             if (localStorage.getItem('td_force_local') === 'true') return 'OFFLINE';
             const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-            return isLocal ? 'https://tinda-done-admin.vercel.app' : '';
+            return isLocal ? 'https://tinda-done.vercel.app' : '';
         }
 
         function toggleForceLocal() {
