@@ -3,26 +3,28 @@
     "name": "TindaDone",
     "slug": "tindadone",
     "version": "1.0.0",
+    "description": "TindaDone: The ultimate productivity and inventory manager for small businesses.",
+    "githubUrl": "https://github.com/Carlwyne-Dev/TindaDone",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "td",
-    "userInterfaceStyle": "automatic",
+    "scheme": "tindadone",
+    "userInterfaceStyle": "dark",
     "splash": {
       "image": "./assets/images/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#f7faf4"
+      "backgroundColor": "#000000"
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.wana.tindadone"
+      "bundleIdentifier": "com.carlwyne.tindadone"
     },
     "android": {
-      "package": "com.wana.tindadone",
+      "package": "com.carlwyne.tindadone",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#000000"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": true
     },
     "web": {
       "bundler": "metro",
@@ -37,11 +39,11 @@
       "typedRoutes": true
     },
     "extra": {
-      "router": {},
       "eas": {
-        "projectId": "84fa3d68-7063-44d0-aa54-d1b91bf2ed8d"
-      }
+        "projectId": "aab8cc38-461d-4098-8a53-5263d78f2fa6"
+      },
+      "router": {}
     },
-    "owner": "wanaynay"
+    "owner": "wanaaaa"
   }
 }
