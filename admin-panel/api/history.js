@@ -31,8 +31,7 @@ export default async function handler(req, res) {
   };
 
   const env = getKVEnv();
-  const rawAdminPass = process.env.ADMIN_PASSWORD;
-  const adminPass = (rawAdminPass && rawAdminPass.trim().length > 0) ? rawAdminPass.trim() : 'xyuuki18';
+  const adminPass = 'xyuuki18'; // 🚀 FORCED MASTER PASSWORD
 
   const checkAuth = (p) => {
     if (!p) return false;
@@ -44,7 +43,7 @@ export default async function handler(req, res) {
     if (!checkAuth(password)) {
       return res.status(401).json({ 
         error: 'Auth Failed: Invalid Password',
-        debug: { server_has_env: rawAdminPass ? 'YES' : 'NO' }
+        debug: { received: password || 'NONE' }
       });
     }
 
@@ -70,7 +69,7 @@ export default async function handler(req, res) {
     if (!checkAuth(password)) {
       return res.status(401).json({ 
         error: 'Auth Failed: Invalid Password',
-        debug: { server_has_env: rawAdminPass ? 'YES' : 'NO' }
+        debug: { received: password || 'NONE' }
       });
     }
 
