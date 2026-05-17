@@ -53,6 +53,33 @@ module.exports = async (req, res) => {
   const env = getKVEnv();
   try {
     const data = await kvRequest(["LRANGE", "recent_trials", "0", "50"], env);
-    return res.status(200).json({ logs: data.result || [] });
+    let logs = data.result || [];
+    
+    const TRIAL_DAYS = 7;
+    const now = Date.now();
+    
+    const enrichedLogs = logs.map(logStr => {
+      try {
+        const logObj = typeof logStr === 'string' ? JSON.parse(logStr) : logStr;
+        if (logObj.date) {
+          const startDate = new Date(logObj.date);
+          const expiresAt = new Date(startDate.getTime() + TRIAL_DAYS * 24 * 60 * 60 * 1000);
+          const isExpired = now > expiresAt.getTime();
+          const daysLeft = isExpired ? 0 : Math.ceil((expiresAt.getTime() - now) / (1000 * 60 * 60 * 24));
+          
+          return {
+            ...logObj,
+            expiresAt: expiresAt.toISOString(),
+            isExpired,
+            daysLeft
+          };
+        }
+        return logObj;
+      } catch (e) {
+        return logStr;
+      }
+    });
+
+    return res.status(200).json({ logs: enrichedLogs });
   } catch (error) { return res.status(500).json({ error: `CRITICAL_LIST_FAIL: ${error.message}` }); }
 };

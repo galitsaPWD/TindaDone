@@ -93,7 +93,7 @@ function CustomTabBar({ state, descriptors, navigation }: any) {
 export default function TabLayout() {
   const router = useRouter();
   const { businessSettings, updateSettings, isSettingsOpen, setIsSettingsOpen } = useSettings();
-  const [tempSettings, setTempSettings] = React.useState<BusinessSettings>({});
+  const [tempSettings, setTempSettings] = React.useState<BusinessSettings>(businessSettings);
   const [newCategory, setNewCategory] = React.useState('');
   const [showToast, setShowToast] = React.useState(false);
 
@@ -110,12 +110,10 @@ export default function TabLayout() {
     checkAuth();
   }, []);
 
-  // Sync tempSettings with global settings when modal opens
+  // Update tempSettings ONLY when businessSettings actually change from context or background load
   React.useEffect(() => {
-    if (isSettingsOpen) {
-      setTempSettings(businessSettings);
-    }
-  }, [isSettingsOpen, businessSettings]);
+    setTempSettings(businessSettings);
+  }, [businessSettings]);
 
   const handleSave = async () => {
     await updateSettings(tempSettings);
