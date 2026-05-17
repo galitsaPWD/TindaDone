@@ -624,8 +624,9 @@ export default function ProductDetailScreen() {
       </ScrollView>
 
       {/* Restock Modal */}
-      <Modal visible={restockVisible} transparent animationType="slide">
-        <BlurView intensity={25} tint="dark" style={styles.modalOverlay}>
+      <Modal visible={restockVisible} transparent animationType="slide" onRequestClose={() => setRestockVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <BlurView intensity={25} tint="dark" style={StyleSheet.absoluteFill} />
           <TouchableOpacity activeOpacity={1} style={StyleSheet.absoluteFill} onPress={() => setRestockVisible(false)} />
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Stock Integration</Text>
@@ -810,12 +811,13 @@ export default function ProductDetailScreen() {
             </View>
             </ScrollView>
           </View>
-        </BlurView>
+        </View>
       </Modal>
 
       {/* Edit Product Modal */}
-      <Modal visible={editVisible} transparent animationType="slide">
-        <BlurView intensity={30} tint="light" style={styles.modalOverlay}>
+      <Modal visible={editVisible} transparent animationType="slide" onRequestClose={() => setEditVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <BlurView intensity={30} tint="light" style={StyleSheet.absoluteFill} />
           <TouchableOpacity activeOpacity={1} style={StyleSheet.absoluteFill} onPress={() => setEditVisible(false)} />
           <View style={styles.modalCard}>
              <View style={styles.modalHeader}>
@@ -1030,12 +1032,13 @@ export default function ProductDetailScreen() {
               </View>
             </ScrollView>
           </View>
-        </BlurView>
+        </View>
       </Modal>
 
       {/* Log Detail Modal */}
-      <Modal visible={detailVisible} transparent animationType="fade">
-        <BlurView intensity={40} tint="light" style={styles.modalOverlay}>
+      <Modal visible={detailVisible} transparent animationType="fade" onRequestClose={() => { setDetailVisible(false); setShowFullData(false); }}>
+        <View style={styles.modalOverlay}>
+          <BlurView intensity={40} tint="light" style={StyleSheet.absoluteFill} />
           <TouchableOpacity 
             activeOpacity={1} 
             style={StyleSheet.absoluteFill} 
@@ -1122,12 +1125,13 @@ export default function ProductDetailScreen() {
               </ScrollView>
             )}
           </View>
-        </BlurView>
+        </View>
       </Modal>
 
       {/* Delete Confirmation Modal */}
-      <Modal visible={deleteVisible} transparent animationType="fade">
-        <BlurView intensity={50} tint="dark" style={styles.centeredModalOverlay}>
+      <Modal visible={deleteVisible} transparent animationType="fade" onRequestClose={() => setDeleteVisible(false)}>
+        <View style={styles.centeredModalOverlay}>
+          <BlurView intensity={50} tint="dark" style={StyleSheet.absoluteFill} />
           <View style={styles.centeredModalCard}>
             <Text style={styles.modalTitle}>Delete Product</Text>
             <Text style={styles.deleteDesc}>Are you sure you want to delete "{product.name}"? This action cannot be undone.</Text>
@@ -1140,7 +1144,7 @@ export default function ProductDetailScreen() {
               </TouchableOpacity>
             </View>
           </View>
-        </BlurView>
+        </View>
       </Modal>
 
       {/* Barcode Scanner Modal */}
@@ -1166,8 +1170,9 @@ export default function ProductDetailScreen() {
       </Modal>
 
       {/* Custom Alert Modal */}
-      <Modal visible={alertVisible} transparent animationType="fade">
-        <BlurView intensity={60} tint="dark" style={styles.modalOverlay}>
+      <Modal visible={alertVisible} transparent animationType="fade" onRequestClose={() => setAlertVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <BlurView intensity={60} tint="dark" style={StyleSheet.absoluteFill} />
           <View style={styles.alertCard}>
             {alertConfig.type === 'success' && <CheckCircle2 size={48} color={Theme.colors.primary} style={styles.alertIcon} />}
             {alertConfig.type === 'error' && <X size={48} color={Theme.colors.tertiary} style={styles.alertIcon} />}
@@ -1190,7 +1195,7 @@ export default function ProductDetailScreen() {
               <Text style={styles.alertBtnText}>Got it</Text>
             </TouchableOpacity>
           </View>
-        </BlurView>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -1495,7 +1500,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 40,
     borderTopRightRadius: 40,
     padding: 32,
-    maxHeight: '90%',
+    height: height * 0.85,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -20 },
     shadowOpacity: 0.2,

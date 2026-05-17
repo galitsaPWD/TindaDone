@@ -474,8 +474,9 @@ export default function StatsScreen() {
       </ScrollView>
 
       {/* Daily Closeout Modal */}
-      <Modal visible={showCloseout} transparent animationType="slide" onShow={() => setShowScrollHint(true)}>
-        <BlurView intensity={100} tint="light" style={styles.modalOverlay}>
+      <Modal visible={showCloseout} transparent animationType="slide" onShow={() => setShowScrollHint(true)} onRequestClose={() => setShowCloseout(false)}>
+        <View style={styles.modalOverlay}>
+          <BlurView intensity={100} tint="light" style={StyleSheet.absoluteFill} />
           <View style={styles.summaryCard}>
             <ScrollView
               showsVerticalScrollIndicator={false}
@@ -593,7 +594,7 @@ export default function StatsScreen() {
               <Text style={styles.shareHint}>Take a screenshot to save this report</Text>
             </View>
             </View>
-        </BlurView>
+        </View>
       </Modal>
 
 
@@ -986,7 +987,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 30,
     elevation: 12,
-    maxHeight: '90%',
+    height: Dimensions.get('window').height * 0.85,
   },
   summaryHeader: {
     alignItems: 'center',

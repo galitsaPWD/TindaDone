@@ -563,9 +563,10 @@ export default function ProductsScreen() {
       </TouchableOpacity>
 
       {/* Add Product Modal */}
-      <Modal visible={modalVisible} transparent animationType="slide">
-        <BlurView intensity={100} tint="light" style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
+      <Modal visible={modalVisible} transparent animationType="slide" onRequestClose={() => setModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <BlurView intensity={100} tint="light" style={StyleSheet.absoluteFill} />
+          <View style={styles.modalContent}>
           <View style={styles.modalIndicator} />
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>Add New Product</Text>
@@ -848,7 +849,7 @@ export default function ProductsScreen() {
             </TouchableOpacity>
           </ScrollView>
         </View>
-      </BlurView>
+      </View>
     </Modal>
 
         {/* Inner Barcode Scanner Modal */}
@@ -1239,8 +1240,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 32,
     borderTopRightRadius: 32,
     padding: 24,
-    minHeight: height * 0.85, // Restored height so it goes 'up'
-    maxHeight: '90%',
+    height: height * 0.85,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -20 },
     shadowOpacity: 0.1,

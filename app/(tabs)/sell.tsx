@@ -801,8 +801,9 @@ export default function SellScreen() {
       </TouchableOpacity>
 
       {/* Manual Qty Modal (Cross-platform) */}
-      <Modal visible={qtyModalVisible} transparent animationType="slide">
-        <BlurView intensity={40} tint="light" style={styles.modalOverlay}>
+      <Modal visible={qtyModalVisible} transparent animationType="slide" onRequestClose={() => setQtyModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <BlurView intensity={40} tint="light" style={StyleSheet.absoluteFill} />
           <View style={styles.qtyModalContent}>
             <Text style={styles.qtyModalTitle}>Set Quantity</Text>
             <Text style={styles.qtyModalSub}>{editingItem?.productName}</Text>
@@ -824,12 +825,13 @@ export default function SellScreen() {
               </TouchableOpacity>
             </View>
           </View>
-        </BlurView>
+        </View>
       </Modal>
 
       {/* Checkout Summary Modal */}
-      <Modal visible={checkoutModalVisible} transparent animationType="slide">
-        <BlurView intensity={40} tint="light" style={styles.sheetOverlay}>
+      <Modal visible={checkoutModalVisible} transparent animationType="slide" onRequestClose={() => setCheckoutModalVisible(false)}>
+        <View style={styles.sheetOverlay}>
+          <BlurView intensity={40} tint="light" style={StyleSheet.absoluteFill} />
           <View style={styles.checkoutModalContent}>
             <View style={styles.dialogHeader}>
               <Text style={styles.dialogTitle}>Complete Sale</Text>
@@ -952,12 +954,13 @@ export default function SellScreen() {
             </TouchableOpacity>
             </ScrollView>
           </View>
-        </BlurView>
+        </View>
       </Modal>
 
       {/* Utang Customer Name Modal */}
-      <Modal visible={utangModalVisible} transparent animationType="fade">
-        <BlurView intensity={40} tint="light" style={styles.modalOverlay}>
+      <Modal visible={utangModalVisible} transparent animationType="fade" onRequestClose={() => setUtangModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <BlurView intensity={40} tint="light" style={StyleSheet.absoluteFill} />
           <View style={styles.utangPromptCard}>
             <Text style={styles.utangPromptTitle}>Customer Name</Text>
             <Text style={styles.utangPromptSub}>Who is this debt for?</Text>
@@ -996,12 +999,13 @@ export default function SellScreen() {
               </TouchableOpacity>
             </View>
           </View>
-        </BlurView>
+        </View>
       </Modal>
 
       {/* Welcome Modal */}
-      <Modal visible={showWelcome} transparent animationType="slide">
-        <BlurView intensity={40} tint="light" style={styles.welcomeOverlay}>
+      <Modal visible={showWelcome} transparent animationType="slide" onRequestClose={() => setShowWelcome(false)}>
+        <View style={styles.welcomeOverlay}>
+          <BlurView intensity={40} tint="light" style={StyleSheet.absoluteFill} />
           <View style={styles.welcomeCard}>
             <Rocket size={64} color={Theme.colors.primary} style={{ marginBottom: 20 }} />
             <Text style={styles.welcomeTitle}>Welcome to TindaDone!</Text>
@@ -1016,7 +1020,7 @@ export default function SellScreen() {
               <Text style={styles.welcomeBtnText}>Let's Go!</Text>
             </TouchableOpacity>
           </View>
-        </BlurView>
+        </View>
       </Modal>
 
       {/* Rapid-Fire Scanner Mode HUD */}
@@ -1110,8 +1114,9 @@ export default function SellScreen() {
       </Modal>
 
       {/* Custom Alert Modal */}
-      <Modal visible={alertVisible} transparent animationType="fade">
-        <BlurView intensity={20} tint="dark" style={styles.modalOverlay}>
+      <Modal visible={alertVisible} transparent animationType="fade" onRequestClose={() => setAlertVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <BlurView intensity={20} tint="dark" style={StyleSheet.absoluteFill} />
           <Animated.View entering={ZoomIn} style={styles.alertCard}>
             {alertConfig.type === 'success' && <CheckCircle2 size={48} color={Theme.colors.primary} style={styles.alertIcon} />}
             {alertConfig.type === 'error' && <X size={48} color={Theme.colors.tertiary} style={styles.alertIcon} />}
@@ -1145,7 +1150,7 @@ export default function SellScreen() {
               </TouchableOpacity>
             </View>
           </Animated.View>
-        </BlurView>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -1463,7 +1468,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 36,
     padding: 24,
     paddingBottom: 40,
-    maxHeight: '90%',
+    height: Dimensions.get('window').height * 0.85,
   },
   dialogHeader: {
     flexDirection: 'row',

@@ -398,8 +398,9 @@ export default function UtangScreen() {
       </TouchableOpacity>
 
       {/* Entry Modal */}
-      <Modal visible={modalVisible} animationType="slide" transparent>
-        <BlurView intensity={60} tint="light" style={styles.modalOverlay}>
+      <Modal visible={modalVisible} animationType="slide" transparent onRequestClose={() => { setModalVisible(false); resetForm(); }}>
+        <View style={styles.modalOverlay}>
+          <BlurView intensity={60} tint="light" style={StyleSheet.absoluteFill} />
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>{editingRecord ? 'Edit Utang' : 'New Utang'}</Text>
@@ -479,12 +480,13 @@ export default function UtangScreen() {
               </TouchableOpacity>
             </ScrollView>
           </View>
-        </BlurView>
+        </View>
       </Modal>
 
       {/* Item Picker Modal */}
-      <Modal visible={pickerVisible} animationType="fade" transparent>
-        <BlurView intensity={50} tint="dark" style={styles.centeredOverlay}>
+      <Modal visible={pickerVisible} animationType="fade" transparent onRequestClose={() => setPickerVisible(false)}>
+        <View style={styles.centeredOverlay}>
+          <BlurView intensity={50} tint="dark" style={StyleSheet.absoluteFill} />
           <View style={styles.pickerCard}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Select Items</Text>
@@ -517,12 +519,13 @@ export default function UtangScreen() {
               <Text style={styles.pickerDoneText}>Done picking</Text>
             </TouchableOpacity>
           </View>
-        </BlurView>
+        </View>
       </Modal>
 
       {/* Payment Selection Modal */}
-      <Modal visible={paymentModalVisible} transparent animationType="fade">
-        <BlurView intensity={60} tint="dark" style={styles.centeredOverlay}>
+      <Modal visible={paymentModalVisible} transparent animationType="fade" onRequestClose={() => setPaymentModalVisible(false)}>
+        <View style={styles.centeredOverlay}>
+          <BlurView intensity={60} tint="dark" style={StyleSheet.absoluteFill} />
           <View style={styles.paymentPickerCard}>
             <Text style={styles.paymentPickerTitle}>
               {paymentStep === 'confirm_gcash' ? 'Scan to Pay' : 'Payment Method'}
@@ -588,12 +591,13 @@ export default function UtangScreen() {
               </Text>
             </TouchableOpacity>
           </View>
-        </BlurView>
+        </View>
       </Modal>
 
       {/* Custom Alert Modal */}
-      <Modal visible={alertVisible} transparent animationType="fade">
-        <BlurView intensity={70} tint="dark" style={styles.centeredOverlay}>
+      <Modal visible={alertVisible} transparent animationType="fade" onRequestClose={() => setAlertVisible(false)}>
+        <View style={styles.centeredOverlay}>
+          <BlurView intensity={70} tint="dark" style={StyleSheet.absoluteFill} />
           <View style={styles.alertCard}>
             {alertConfig.type === 'success' && <CheckCircle2 size={48} color={Theme.colors.primary} style={styles.alertIcon} />}
             {alertConfig.type === 'error' && <X size={48} color={Theme.colors.tertiary} style={styles.alertIcon} />}
@@ -630,7 +634,7 @@ export default function UtangScreen() {
               </TouchableOpacity>
             </View>
           </View>
-        </BlurView>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -951,7 +955,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 40,
     borderTopRightRadius: 40,
     padding: 32,
-    maxHeight: '90%',
+    height: Dimensions.get('window').height * 0.85,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -20 },
     shadowOpacity: 0.1,

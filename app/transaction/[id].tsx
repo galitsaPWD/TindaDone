@@ -232,8 +232,9 @@ export default function TransactionDetailScreen() {
       </ScrollView>
 
       {/* Custom Alert Modal */}
-      <Modal visible={alertVisible} transparent animationType="fade">
-        <BlurView intensity={20} tint="dark" style={styles.modalOverlay}>
+      <Modal visible={alertVisible} transparent animationType="fade" onRequestClose={() => setAlertVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <BlurView intensity={20} tint="dark" style={StyleSheet.absoluteFill} />
           <Animated.View entering={ZoomIn} style={styles.alertCard}>
             {alertConfig.type === 'success' && <CheckCircle2 size={48} color={Theme.colors.primary} style={styles.alertIcon} />}
             {alertConfig.type === 'error' && <X size={48} color={Theme.colors.tertiary} style={styles.alertIcon} />}
@@ -267,7 +268,7 @@ export default function TransactionDetailScreen() {
               </TouchableOpacity>
             </View>
           </Animated.View>
-        </BlurView>
+        </View>
       </Modal>
     </SafeAreaView>
   );

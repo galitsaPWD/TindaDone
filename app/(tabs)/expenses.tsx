@@ -183,8 +183,9 @@ export default function ExpensesScreen() {
         <Plus size={32} color="#FFF" />
       </TouchableOpacity>
 
-      <Modal visible={modalVisible} animationType="slide" transparent>
-        <BlurView intensity={60} tint="light" style={styles.modalOverlay}>
+      <Modal visible={modalVisible} animationType="slide" transparent onRequestClose={() => { setModalVisible(false); resetForm(); }}>
+        <View style={styles.modalOverlay}>
+          <BlurView intensity={60} tint="light" style={StyleSheet.absoluteFill} />
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>New Expense</Text>
@@ -231,12 +232,13 @@ export default function ExpensesScreen() {
               </TouchableOpacity>
             </ScrollView>
           </View>
-        </BlurView>
+        </View>
       </Modal>
 
       {/* Custom Alert Modal */}
-      <Modal visible={alertVisible} transparent animationType="fade">
-        <BlurView intensity={70} tint="dark" style={styles.centeredOverlay}>
+      <Modal visible={alertVisible} transparent animationType="fade" onRequestClose={() => setAlertVisible(false)}>
+        <View style={styles.centeredOverlay}>
+          <BlurView intensity={70} tint="dark" style={StyleSheet.absoluteFill} />
           <View style={styles.alertCard}>
             {alertConfig.type === 'warning' && <AlertTriangle size={48} color="#f59e0b" style={styles.alertIcon} />}
             {alertConfig.type === 'info' && <Info size={48} color={Theme.colors.primary} style={styles.alertIcon} />}
@@ -271,7 +273,7 @@ export default function ExpensesScreen() {
               </TouchableOpacity>
             </View>
           </View>
-        </BlurView>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -443,7 +445,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 40,
     borderTopRightRadius: 40,
     padding: 32,
-    maxHeight: '90%',
+    height: Dimensions.get('window').height * 0.85,
   },
   modalHeader: {
     flexDirection: 'row',

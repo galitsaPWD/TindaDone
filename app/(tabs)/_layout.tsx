@@ -271,7 +271,8 @@ export default function TabLayout() {
       transparent={true}
       onRequestClose={() => setIsSettingsOpen(false)}
     >
-      <BlurView intensity={100} tint="light" style={styles.modalOverlay}>
+      <View style={styles.modalOverlay}>
+        <BlurView intensity={100} tint="light" style={StyleSheet.absoluteFill} />
         <View style={styles.modalContent}>
           <View style={styles.modalIndicator} />
           <View style={styles.modalHeader}>
@@ -287,7 +288,7 @@ export default function TabLayout() {
             </TouchableOpacity>
           </View>
 
-          <ScrollView style={styles.settingsScroll} showsVerticalScrollIndicator={false}>
+          <ScrollView style={styles.settingsScroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
             <View style={styles.settingGroup}>
               <Text style={styles.groupLabel}>Identity</Text>
               <View style={styles.inputCard}>
@@ -422,7 +423,7 @@ export default function TabLayout() {
             <Text style={styles.finalSaveText}>Apply Changes</Text>
           </TouchableOpacity>
         </View>
-      </BlurView>
+      </View>
     </Modal>
 
     {showToast && (
@@ -526,7 +527,7 @@ const styles = StyleSheet.create({
     padding: 24,
     paddingTop: 12,
     paddingBottom: 40,
-    maxHeight: '90%',
+    height: Dimensions.get('window').height * 0.85,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -20 },
     shadowOpacity: 0.2,
@@ -569,6 +570,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   settingsScroll: {
+    flex: 1,
     marginBottom: 24,
   },
   settingGroup: {
